@@ -1,0 +1,21 @@
+# Rust / Cargo
+/target/
+**/*.rs.bk
+Cargo.lock.bak
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Local env / secrets
+.env
+.env.local
+
+# Coverage
+target/coverage/
+
+# IDE rust-analyzer cache
+.rust-analyzer/

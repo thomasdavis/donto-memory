@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>donto-memory · agentic-memory runtime</title>
+  <meta name="description" content="Agentic-memory runtime that runs on top of the donto evidence substrate. Bitemporal, paraconsistent, policy-gated recall.">
+  <link rel="canonical" href="https://memories.apexpots.com/">
+  <style>
+    :root {
+      --fg: #1a1a1a;
+      --fg-soft: #4a4a4a;
+      --muted: #6f6f6f;
+      --bg: #fafaf7;
+      --link: #1a4fb5;
+      --rule: #d8d4ca;
+      --code-bg: #f0ece2;
+      --accent: #6b3fb0;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: ui-monospace, "SF Mono", "Menlo", "Consolas", monospace;
+      font-size: 14px;
+      line-height: 1.55;
+      color: var(--fg);
+      background: var(--bg);
+      margin: 0 auto;
+      padding: 2.5rem 1.5rem 6rem;
+      max-width: 840px;
+    }
+    header.site {
+      border-bottom: 1px solid var(--rule);
+      padding-bottom: 0.8rem;
+      margin-bottom: 2rem;
+      font-size: 12px;
+      color: var(--muted);
+      display: flex;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+    }
+    header.site a { color: var(--muted); }
+    h1 {
+      font-size: 1.7rem;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      margin: 0.5rem 0 0.25rem;
+    }
+    h1 .accent { color: var(--accent); }
+    .tagline {
+      color: var(--fg-soft);
+      font-size: 0.95rem;
+      margin-bottom: 1.75rem;
+    }
+    h2 {
+      font-size: 1.05rem;
+      font-weight: 600;
+      margin: 2.25rem 0 0.6rem;
+      padding-bottom: 0.2rem;
+      border-bottom: 1px solid var(--rule);
+    }
+    h3 {
+      font-size: 0.95rem;
+      font-weight: 600;
+      margin: 1.4rem 0 0.4rem;
+    }
+    p, ul, ol { margin: 0.55rem 0; }
+    ul, ol { padding-left: 1.5rem; }
+    li { margin: 0.15rem 0; }
+    a { color: var(--link); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    code {
+      font-family: inherit;
+      background: var(--code-bg);
+      padding: 0.05rem 0.32rem;
+      border-radius: 3px;
+      font-size: 0.93em;
+    }
+    pre {
+      background: var(--code-bg);
+      padding: 0.85rem 1rem;
+      border-radius: 4px;
+      overflow-x: auto;
+      font-size: 0.9em;
+      line-height: 1.5;
+    }
+    pre code { background: none; padding: 0; }
+    table {
+      border-collapse: collapse;
+      margin: 0.5rem 0 1rem;
+      font-size: 0.93em;
+      width: 100%;
+    }
+    th, td {
+      border-bottom: 1px solid var(--rule);
+      padding: 0.35rem 0.85rem 0.35rem 0;
+      text-align: left;
+      vertical-align: top;
+    }
+    th { font-weight: 600; }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.8rem;
+      margin: 1rem 0;
+    }
+    .card {
+      border: 1px solid var(--rule);
+      border-radius: 5px;
+      padding: 0.85rem 1rem;
+      background: #fff;
+    }
+    .card strong { display: block; margin-bottom: 0.25rem; }
+    .card small { color: var(--muted); }
+    .cta {
+      display: inline-block;
+      background: var(--accent);
+      color: #fff;
+      padding: 0.35rem 0.8rem;
+      border-radius: 4px;
+      font-weight: 500;
+      margin: 0.4rem 0.6rem 0.4rem 0;
+    }
+    .cta:hover { background: #5a3199; text-decoration: none; }
+    .cta.alt { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+    .cta.alt:hover { background: #efeaf5; }
+    footer {
+      margin-top: 4rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--rule);
+      color: var(--muted);
+      font-size: 0.85em;
+    }
+  </style>
+</head>
+<body>
+  <header class="site">
+    <span>memories.apexpots.com</span>
+    <span>v0.1.0 · binds to <code>donto 0.1.0-m10</code></span>
+  </header>
+
+  <h1><span class="accent">donto-memory</span></h1>
+  <p class="tagline">
+    Agentic-memory runtime that runs on top of the
+    <a href="https://github.com/thomasdavis/donto">donto</a> evidence
+    substrate. Bitemporal. Paraconsistent. Policy-gated recall. No
+    silent rewrites.
+  </p>
+
+  <p>
+    <a class="cta" href="/docs">Open API docs</a>
+    <a class="cta alt" href="/openapi.json">Raw OpenAPI</a>
+    <a class="cta alt" href="https://github.com/thomasdavis/donto-memory">GitHub</a>
+  </p>
+
+  <h2>three commitments</h2>
+  <ol>
+    <li>
+      <strong>No silent rewrite.</strong> Reconsolidation derives new
+      claims from recalled ones — it never overwrites originals. The
+      original chunks remain queryable forever; derived summaries are
+      additional claims with a <code>supersedes</code> argument edge
+      back to the source.
+    </li>
+    <li>
+      <strong>Read events are not belief events.</strong> A recall
+      bumps a counter in <code>donto_x_memory_access</code> (overlay),
+      not anywhere in the substrate&rsquo;s <code>donto_statement</code>
+      table. Bitemporal discipline preserved: <code>tx_time</code>
+      reflects belief, not access.
+    </li>
+    <li>
+      <strong>Policy-aware by default.</strong> Every recall passes a
+      holder agent and an action through to <code>POST /recall</code>
+      on the substrate. The substrate returns rows the holder is
+      attested for; donto-memory passes them through unchanged.
+    </li>
+  </ol>
+
+  <h2>memory modules</h2>
+  <p>Three plug-in modules ship by default; consumers may add more.</p>
+  <div class="grid">
+    <div class="card">
+      <strong>episodic</strong>
+      <small>token · experiential</small>
+      <p>Verbatim event/chunk recall — the raw user-utterance store.
+        Each ingest writes one <code>mem:episodic/chunk</code>
+        statement with the raw text as a literal.</p>
+    </div>
+    <div class="card">
+      <strong>semantic-claim</strong>
+      <small>structured · factual</small>
+      <p>Extracted typed claims (subject / predicate / object). Each
+        claim becomes one substrate statement; records anchor to the
+        <code>statement_id</code>.</p>
+    </div>
+    <div class="card">
+      <strong>preference</strong>
+      <small>structured · preference</small>
+      <p>User preferences. Every update is a new statement plus a
+        <code>supersedes</code> argument edge to the prior value.
+        Both live forever; recall returns the latest.</p>
+    </div>
+  </div>
+
+  <h2>quick start</h2>
+  <pre><code># Health.
+curl -s https://memories.apexpots.com/health
+
+# Ingest into the episodic module.
+curl -s -X POST https://memories.apexpots.com/ingest/episodic \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "holder": "agent:ajax",
+    "session_id": "s-2026-05-28",
+    "text": "I met Annie Davis at the Cooktown Festival in 1979."
+  }'
+
+# Recall — Memory Evidence Bundle.
+curl -s -X POST https://memories.apexpots.com/recall \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "holder": "agent:ajax",
+    "action": "read_content",
+    "query": "Annie Davis",
+    "limit": 20,
+    "permitted_only": true
+  }'</code></pre>
+
+  <h2>architecture</h2>
+  <p>
+    donto-memory is two long-running processes plus five overlay
+    tables in the substrate's database:
+  </p>
+  <table>
+    <tr><th>Process</th><th>Role</th></tr>
+    <tr><td><code>donto-memory api</code></td><td>FastAPI-equivalent axum server. Ingest + recall.</td></tr>
+    <tr><td><code>donto-memory worker</code></td><td>Sleep-path drain of the reconsolidation queue.</td></tr>
+  </table>
+  <table>
+    <tr><th>Overlay table</th><th>Role</th></tr>
+    <tr><td><code>donto_x_memory_module</code></td><td>Registered modules.</td></tr>
+    <tr><td><code>donto_x_memory_record</code></td><td>One row per unit of memory.</td></tr>
+    <tr><td><code>donto_x_memory_access</code></td><td>Append-only access events.</td></tr>
+    <tr><td><code>donto_x_memory_state</code></td><td>Bitemporal-versioned recall state.</td></tr>
+    <tr><td><code>donto_x_memory_reconsolidation_queue</code></td><td>Sleep-path work items.</td></tr>
+  </table>
+
+  <h2>substrate handshake</h2>
+  <p>
+    donto-memory <em>requires</em> a donto substrate at contract
+    version <code>0.1.0-m10</code> or higher. The handshake at
+    startup checks <code>GET /discovery/contract-version</code> and
+    refuses to run against an older substrate.
+  </p>
+
+  <h2>not what this is</h2>
+  <ul>
+    <li>donto-memory is <strong>not a model</strong>. It stores facts about what an agent has been told, what it has inferred, and what its user prefers. The reasoning still happens elsewhere.</li>
+    <li>donto-memory is <strong>not a vector store</strong>. It uses donto's predicate alignment + identity-lens machinery for semantic-similar lookups. Vector embeddings are an optional follow-on.</li>
+    <li>donto-memory is <strong>not a chat history</strong>. Episodic memory <em>can</em> store chat turns, but the value-add over a plain transcript is the bitemporal, policy-gated, contradiction-preserving recall.</li>
+  </ul>
+
+  <h2>links</h2>
+  <ul>
+    <li><a href="/docs">Interactive API documentation</a> (Swagger UI)</li>
+    <li><a href="/openapi.json">OpenAPI 3.1 JSON</a></li>
+    <li><a href="https://github.com/thomasdavis/donto-memory">GitHub repository</a></li>
+    <li><a href="https://github.com/thomasdavis/donto">donto substrate</a></li>
+    <li><a href="https://genes.apexpots.com/research/donto-substrate-prd-2026-05-28.html">substrate PRD (M10 substrate hardening)</a></li>
+    <li><a href="https://genes.apexpots.com/research/donto-paper-2026-05-28.html">donto systems paper</a></li>
+  </ul>
+
+  <footer>
+    donto-memory v0.1.0 · Apache-2.0 OR MIT · Generated by the
+    binary; no static build step. Source:
+    <a href="https://github.com/thomasdavis/donto-memory">github.com/thomasdavis/donto-memory</a>.
+  </footer>
+</body>
+</html>

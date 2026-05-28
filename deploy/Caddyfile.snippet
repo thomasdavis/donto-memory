@@ -1,0 +1,11 @@
+# Caddy snippet for routing donto-memory traffic on genes.apexpots.com.
+# Add this inside the `genes.apexpots.com { ... }` block alongside the
+# existing M10 /discovery and /recall routes. Reload Caddy after.
+
+    # ---- donto-memory API (FastAPI on :7900) ----
+    handle /memory/* {
+        reverse_proxy localhost:7900
+    }
+    handle /memory {
+        reverse_proxy localhost:7900
+    }

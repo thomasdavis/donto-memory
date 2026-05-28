@@ -1,0 +1,34 @@
+[package]
+name         = "donto-memory-core"
+version      = { workspace = true }
+edition      = { workspace = true }
+rust-version = { workspace = true }
+license      = { workspace = true }
+repository   = { workspace = true }
+authors      = { workspace = true }
+description  = "Core library for donto-memory — substrate client, modules, hot/sleep paths."
+
+[dependencies]
+tokio              = { workspace = true }
+async-trait        = { workspace = true }
+futures            = { workspace = true }
+
+reqwest            = { workspace = true }
+tokio-postgres     = { workspace = true }
+deadpool-postgres  = { workspace = true }
+postgres-types     = { workspace = true }
+
+serde              = { workspace = true }
+serde_json         = { workspace = true }
+uuid               = { workspace = true }
+chrono             = { workspace = true }
+
+thiserror          = { workspace = true }
+anyhow             = { workspace = true }
+tracing            = { workspace = true }
+
+sha2               = { workspace = true }
+hex                = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

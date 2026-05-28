@@ -1,0 +1,16 @@
+[Unit]
+Description=donto-memory — sleep-path reconsolidation worker
+Documentation=https://github.com/thomasdavis/donto-memory
+After=network-online.target dontosrv.service donto-memory-api.service
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=-/etc/donto-memory/env
+WorkingDirectory=/mnt/donto-data/workspace/donto-memory
+ExecStart=/usr/local/bin/donto-memory worker
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

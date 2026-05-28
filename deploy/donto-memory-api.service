@@ -1,0 +1,16 @@
+[Unit]
+Description=donto-memory — agentic-memory API server
+Documentation=https://github.com/thomasdavis/donto-memory
+After=network-online.target dontosrv.service
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=-/etc/donto-memory/env
+WorkingDirectory=/mnt/donto-data/workspace/donto-memory
+ExecStart=/usr/local/bin/donto-memory api --bind 127.0.0.1:7900
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

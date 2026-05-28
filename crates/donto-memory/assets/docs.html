@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>donto-memory · API docs</title>
+  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
+  <style>
+    body { margin: 0; }
+    .topbar { display: none !important; }
+    #site-banner {
+      background: #1a1a1a;
+      color: #fafaf7;
+      font-family: ui-monospace, "SF Mono", "Menlo", "Consolas", monospace;
+      font-size: 13px;
+      padding: 10px 24px;
+      display: flex;
+      gap: 20px;
+      align-items: center;
+    }
+    #site-banner a { color: #b8a3e3; text-decoration: none; }
+    #site-banner a:hover { text-decoration: underline; }
+    #site-banner strong { color: #fff; }
+  </style>
+</head>
+<body>
+  <div id="site-banner">
+    <strong>donto-memory · API docs</strong>
+    <span>·</span>
+    <a href="/">home</a>
+    <a href="/openapi.json">openapi.json</a>
+    <a href="https://github.com/thomasdavis/donto-memory">github</a>
+    <span style="flex:1"></span>
+    <span>bound to donto contract <code style="background:#333;padding:2px 6px;border-radius:3px;color:#fff">0.1.0-m10</code></span>
+  </div>
+  <div id="swagger-ui"></div>
+  <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+  <script>
+    window.onload = () => {
+      window.ui = SwaggerUIBundle({
+        url: "/openapi.json",
+        dom_id: "#swagger-ui",
+        deepLinking: true,
+        layout: "BaseLayout",
+        defaultModelsExpandDepth: 1,
+        tryItOutEnabled: true,
+      });
+    };
+  </script>
+</body>
+</html>

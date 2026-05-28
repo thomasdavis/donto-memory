@@ -1,0 +1,52 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/donto-memory-core",
+    "crates/donto-memory",
+]
+
+[workspace.package]
+version      = "0.1.0"
+edition      = "2021"
+rust-version = "1.78"
+license      = "Apache-2.0 OR MIT"
+repository   = "https://github.com/thomasdavis/donto-memory"
+authors      = ["Thomas Davis <thomasalwyndavis@gmail.com>", "Ajax Davis"]
+
+[workspace.dependencies]
+# Async runtime + utils.
+tokio              = { version = "1.41",   features = ["macros", "rt-multi-thread", "signal", "time", "sync"] }
+tokio-util         = { version = "0.7" }
+futures            = { version = "0.3" }
+async-trait        = { version = "0.1" }
+
+# HTTP server + client.
+axum               = { version = "0.7" }
+tower              = { version = "0.5" }
+tower-http         = { version = "0.6",  features = ["cors", "trace"] }
+reqwest            = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# Postgres (for consumer overlay tables).
+tokio-postgres     = { version = "0.7",  features = ["with-uuid-1", "with-chrono-0_4", "with-serde_json-1"] }
+deadpool-postgres  = { version = "0.14" }
+postgres-types     = { version = "0.2",  features = ["with-uuid-1", "with-chrono-0_4", "with-serde_json-1"] }
+
+# Serialization + types.
+serde              = { version = "1.0",  features = ["derive"] }
+serde_json         = { version = "1.0" }
+uuid               = { version = "1.10", features = ["v4", "serde"] }
+chrono             = { version = "0.4",  features = ["serde"] }
+
+# CLI + config.
+clap               = { version = "4.5",  features = ["derive", "env"] }
+dotenvy            = { version = "0.15" }
+
+# Errors + logging.
+thiserror          = { version = "1.0" }
+anyhow             = { version = "1.0" }
+tracing            = { version = "0.1" }
+tracing-subscriber = { version = "0.3",  features = ["env-filter", "json"] }
+
+# Hashing for query_hash on access events.
+sha2               = { version = "0.10" }
+hex                = { version = "0.4" }
