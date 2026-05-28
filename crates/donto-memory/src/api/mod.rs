@@ -2,13 +2,19 @@
 
 use std::sync::Arc;
 
-use axum::{response::Html, routing::{get, post}, Router};
+use axum::{
+    http::header,
+    response::{Html, IntoResponse, Response},
+    routing::{get, post},
+    Router,
+};
 use deadpool_postgres::Pool;
 use donto_memory_core::{substrate::SubstrateClient, Settings};
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
 mod docs;
+pub mod job_log;
 mod openapi;
 mod routes;
 
@@ -40,6 +46,12 @@ pub fn router(state: AppState) -> Router {
         .route("/reconsolidate/queue", get(routes::reconsolidate::queue))
         .route("/openapi.json", get(openapi_doc))
         .route("/docs", get(swagger_ui))
+        .route("/agent.md", get(agent_md))
+        .route("/llms.txt", get(llms_txt))
+        .route("/jobs", get(routes::jobs::list_html))
+        .route("/jobs/list.json", get(routes::jobs::list_json))
+        .route("/jobs/:id", get(routes::jobs::detail_html))
+        .route("/jobs/:id/raw", get(routes::jobs::detail_json))
         .with_state(state)
         .layer(TraceLayer::new_for_http())
         .layer(
@@ -61,6 +73,27 @@ async fn swagger_ui() -> Html<&'static str> {
 
 async fn openapi_doc() -> axum::Json<serde_json::Value> {
     axum::Json(openapi::document())
+}
+
+/// Markdown guide aimed at AI agents. Served as text/markdown so an
+/// agent fetching the URL can ingest it directly.
+async fn agent_md() -> Response {
+    (
+        [(header::CONTENT_TYPE, "text/markdown; charset=utf-8")],
+        docs::AGENT_MD,
+    )
+        .into_response()
+}
+
+/// llms.txt convention — same content as /agent.md but at the
+/// canonical "I am an AI; tell me how to use this site" path. Served
+/// as text/plain.
+async fn llms_txt() -> Response {
+    (
+        [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+        docs::AGENT_MD,
+    )
+        .into_response()
 }
 
 /// JSON summary at `/api` (the old `/` payload, kept for programmatic

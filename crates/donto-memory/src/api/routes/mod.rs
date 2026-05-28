@@ -1,5 +1,6 @@
 pub mod health;
 pub mod ingest;
+pub mod jobs;
 pub mod memorize;
 pub mod modules;
 pub mod recall;

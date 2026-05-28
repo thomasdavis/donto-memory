@@ -17,13 +17,14 @@ use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 use donto_memory_core::extract::{ExtractError, ExtractedFact, MemoryExtractor};
 use donto_memory_core::module::{register_default_modules, IngestInput, MemoryModuleArc};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 use tracing::warn;
 use uuid::Uuid;
 
+use crate::api::job_log;
 use crate::api::AppState;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct MemorizeReq {
     pub holder: String,
     #[serde(default)]
@@ -32,13 +33,19 @@ pub struct MemorizeReq {
     #[serde(default = "default_modality")]
     pub modality: String,
     /// If false, skip the LLM extraction step and only store as
-    /// episodic. Useful when the caller already has structured
-    /// facts and just wants the raw chunk recorded.
+    /// episodic.
     #[serde(default = "default_true")]
     pub extract: bool,
+    /// Override the runtime's default extraction mode. `single` runs
+    /// one LLM call (~20-30 facts, ~5-10 s); `exhaustive` runs five
+    /// apertures in parallel (~100+ facts, ~30-60 s, ~5× tokens).
+    /// Defaults to `DONTO_MEMORY_EXTRACT_MODE` (which itself defaults
+    /// to `exhaustive`).
+    #[serde(default)]
+    pub mode: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct MemorizeBatchReq {
     pub items: Vec<MemorizeReq>,
 }
@@ -50,11 +57,20 @@ pub struct MemorizeResp {
     pub episodic_record_id: Uuid,
     pub episodic_record_iri: String,
     pub extracted: bool,
+    pub extract_mode: Option<String>,
     pub facts_extracted: usize,
     pub facts_ingested: usize,
+    pub dedup_collisions: u32,
     pub semantic_record_ids: Vec<Uuid>,
     pub model: Option<String>,
     pub usage: Option<donto_memory_core::extract::ExtractionUsage>,
+    pub aperture_yields: Vec<donto_memory_core::extract::ApertureYield>,
+    /// The exhaustive list of ontological statements the LLM
+    /// produced from this memorize call. Included verbatim so callers
+    /// can review what the substrate now believes without a follow-up
+    /// query. Always present; empty when extraction is disabled or
+    /// the LLM is not configured.
+    pub facts: Vec<ExtractedFact>,
     pub elapsed_ms: u64,
     pub warnings: Vec<String>,
 }
@@ -70,34 +86,71 @@ pub async fn memorize(
     State(s): State<Arc<AppState>>,
     Json(req): Json<MemorizeReq>,
 ) -> impl IntoResponse {
-    match memorize_one(&s, &req).await {
-        Ok(resp) => Json(resp).into_response(),
-        Err(MemorizeError::BadInput(msg)) => {
-            (StatusCode::BAD_REQUEST, Json(json!({"error": msg}))).into_response()
+    let started = std::time::Instant::now();
+    let request_json = serde_json::to_value(&req).unwrap_or_else(|_| json!({}));
+    let (status_code, resp_json) = match memorize_one(&s, &req).await {
+        Ok(resp) => (200u16, serde_json::to_value(&resp).unwrap_or_else(|_| json!({}))),
+        Err(MemorizeError::BadInput(msg)) => (400u16, json!({"error": msg})),
+        Err(other) => (500u16, json!({"error": other.to_string()})),
+    };
+    let elapsed_ms = started.elapsed().as_millis() as u64;
+    let metrics = if status_code == 200 {
+        let mut m = job_log::metrics_from_memorize(&resp_json);
+        if status_code >= 400 {
+            m.error = resp_json.get("error").and_then(|v| v.as_str()).map(|s| s.to_string());
         }
-        Err(other) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": other.to_string()})),
-        )
-            .into_response(),
-    }
+        m
+    } else {
+        job_log::JobMetrics {
+            error: resp_json.get("error").and_then(|v| v.as_str()).map(|s| s.to_string()),
+            ..Default::default()
+        }
+    };
+    job_log::record_job(
+        &s.pool,
+        &s.settings.consumer_iri,
+        "POST /memorize",
+        Some(&req.holder),
+        req.session_id.as_deref(),
+        status_code,
+        elapsed_ms,
+        &request_json,
+        &resp_json,
+        metrics,
+    )
+    .await;
+    let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::OK);
+    (status, Json(resp_json)).into_response()
 }
 
 pub async fn memorize_batch(
     State(s): State<Arc<AppState>>,
     Json(req): Json<MemorizeBatchReq>,
 ) -> impl IntoResponse {
+    let started = std::time::Instant::now();
+    let request_json = serde_json::to_value(&req).unwrap_or_else(|_| json!({}));
+
     if req.items.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": "items[] is empty"})),
-        )
-            .into_response();
+        let resp = json!({"error": "items[] is empty"});
+        job_log::record_job(
+            &s.pool, &s.settings.consumer_iri, "POST /memorize/batch",
+            None, None, 400, started.elapsed().as_millis() as u64,
+            &request_json, &resp,
+            job_log::JobMetrics { error: Some("items[] is empty".to_string()), ..Default::default() },
+        ).await;
+        return (StatusCode::BAD_REQUEST, Json(resp)).into_response();
     }
-    let mut results: Vec<serde_json::Value> = Vec::with_capacity(req.items.len());
-    for item in req.items {
-        match memorize_one(&s, &item).await {
-            Ok(r) => results.push(serde_json::to_value(r).unwrap()),
+
+    let mut results: Vec<Value> = Vec::with_capacity(req.items.len());
+    let mut total_facts = 0i32;
+    let holder_hint = req.items.first().map(|i| i.holder.clone());
+    let session_hint = req.items.first().and_then(|i| i.session_id.clone());
+    for item in &req.items {
+        match memorize_one(&s, item).await {
+            Ok(r) => {
+                total_facts += r.facts_ingested as i32;
+                results.push(serde_json::to_value(r).unwrap_or_else(|_| json!({})));
+            }
             Err(e) => results.push(json!({
                 "error": e.to_string(),
                 "holder": item.holder,
@@ -105,7 +158,19 @@ pub async fn memorize_batch(
             })),
         }
     }
-    Json(json!({"results": results})).into_response()
+    let resp = json!({"results": results});
+    let elapsed_ms = started.elapsed().as_millis() as u64;
+    job_log::record_job(
+        &s.pool, &s.settings.consumer_iri, "POST /memorize/batch",
+        holder_hint.as_deref(), session_hint.as_deref(),
+        200, elapsed_ms,
+        &request_json, &resp,
+        job_log::JobMetrics {
+            facts_ingested: Some(total_facts),
+            ..Default::default()
+        },
+    ).await;
+    Json(resp).into_response()
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -157,9 +222,13 @@ async fn memorize_one(
     let mut warnings: Vec<String> = Vec::new();
     let mut facts_extracted = 0usize;
     let mut facts_ingested = 0usize;
+    let mut dedup_collisions = 0u32;
     let mut semantic_record_ids: Vec<Uuid> = Vec::new();
     let mut model: Option<String> = None;
     let mut usage = None;
+    let mut aperture_yields = Vec::new();
+    let mut effective_mode: Option<String> = None;
+    let mut extracted_facts: Vec<ExtractedFact> = Vec::new();
 
     if req.extract {
         // 2. Optional LLM extraction.
@@ -170,23 +239,52 @@ async fn memorize_one(
                 );
             }
             Some(extractor) => {
-                match extractor
-                    .extract(
-                        &req.text,
-                        &req.holder,
-                        req.session_id.as_deref(),
-                        Some(&episodic_record.record_iri),
-                    )
-                    .await
-                {
+                let mode = req
+                    .mode
+                    .as_deref()
+                    .unwrap_or(&s.settings.extract_mode)
+                    .to_lowercase();
+                effective_mode = Some(mode.clone());
+                let result = match mode.as_str() {
+                    "single" => {
+                        extractor
+                            .extract_single(
+                                &req.text,
+                                &req.holder,
+                                req.session_id.as_deref(),
+                                Some(&episodic_record.record_iri),
+                            )
+                            .await
+                    }
+                    "exhaustive" | "multi" | "apertures" => {
+                        extractor
+                            .extract_exhaustive(
+                                &req.text,
+                                &req.holder,
+                                req.session_id.as_deref(),
+                                Some(&episodic_record.record_iri),
+                            )
+                            .await
+                    }
+                    other => {
+                        return Err(MemorizeError::BadInput(format!(
+                            "unknown extract mode {other:?}; expected single|exhaustive"
+                        )));
+                    }
+                };
+
+                match result {
                     Err(e) => {
                         warn!(error = %e, "LLM extract failed; episodic-only");
                         warnings.push(format!("extract failed: {e}"));
                     }
                     Ok(result) => {
                         facts_extracted = result.facts.len();
+                        dedup_collisions = result.dedup_collisions;
                         model = Some(result.model.clone());
                         usage = result.usage.clone();
+                        aperture_yields = result.aperture_yields.clone();
+                        extracted_facts = result.facts.clone();
                         for fact in &result.facts {
                             match ingest_fact(s, &semantic, fact, req, &episodic_record.record_iri)
                                 .await
@@ -215,11 +313,15 @@ async fn memorize_one(
         episodic_record_id: episodic_record.record_id,
         episodic_record_iri: episodic_record.record_iri.clone(),
         extracted: req.extract,
+        extract_mode: effective_mode,
         facts_extracted,
         facts_ingested,
+        dedup_collisions,
         semantic_record_ids,
         model,
         usage,
+        aperture_yields,
+        facts: extracted_facts,
         elapsed_ms: started.elapsed().as_millis() as u64,
         warnings,
     })

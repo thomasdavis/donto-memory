@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>donto-memory · agentic-memory runtime</title>
-  <meta name="description" content="Agentic-memory runtime that runs on top of the donto evidence substrate. Bitemporal, paraconsistent, policy-gated recall.">
+  <title>donto-memory · persistent memory for AI agents</title>
+  <meta name="description" content="Persistent memory layer for AI agents. Send what you want remembered — we store the raw text and extract every ontological statement implied by it. Bitemporal, paraconsistent, policy-gated recall.">
   <link rel="canonical" href="https://memories.apexpots.com/">
   <style>
     :root {
@@ -12,61 +12,88 @@
       --fg-soft: #4a4a4a;
       --muted: #6f6f6f;
       --bg: #fafaf7;
+      --bg-alt: #f4f0e6;
       --link: #1a4fb5;
       --rule: #d8d4ca;
       --code-bg: #f0ece2;
       --accent: #6b3fb0;
+      --accent-soft: #efeaf5;
+      --green: #2f7d3a;
+      --red: #b53935;
     }
     * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
     body {
       font-family: ui-monospace, "SF Mono", "Menlo", "Consolas", monospace;
       font-size: 14px;
-      line-height: 1.55;
+      line-height: 1.6;
       color: var(--fg);
       background: var(--bg);
+      margin: 0;
+      padding: 0;
+    }
+    main {
+      max-width: 920px;
       margin: 0 auto;
       padding: 2.5rem 1.5rem 6rem;
-      max-width: 840px;
     }
     header.site {
       border-bottom: 1px solid var(--rule);
-      padding-bottom: 0.8rem;
-      margin-bottom: 2rem;
+      padding: 0.75rem 1.5rem;
       font-size: 12px;
       color: var(--muted);
       display: flex;
       justify-content: space-between;
       flex-wrap: wrap;
       gap: 0.5rem;
+      background: var(--bg);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      max-width: 100%;
     }
-    header.site a { color: var(--muted); }
+    header.site .links a { color: var(--muted); margin-left: 1rem; }
+    header.site .links a:hover { color: var(--fg); }
     h1 {
-      font-size: 1.7rem;
-      font-weight: 600;
-      letter-spacing: -0.01em;
-      margin: 0.5rem 0 0.25rem;
+      font-size: 2.1rem;
+      font-weight: 700;
+      letter-spacing: -0.015em;
+      margin: 1rem 0 0.5rem;
     }
     h1 .accent { color: var(--accent); }
     .tagline {
       color: var(--fg-soft);
-      font-size: 0.95rem;
-      margin-bottom: 1.75rem;
-    }
-    h2 {
       font-size: 1.05rem;
-      font-weight: 600;
-      margin: 2.25rem 0 0.6rem;
-      padding-bottom: 0.2rem;
+      margin-bottom: 1rem;
+      max-width: 60ch;
+    }
+    .hero-statement {
+      background: var(--accent-soft);
+      border-left: 4px solid var(--accent);
+      padding: 1rem 1.2rem;
+      margin: 1.25rem 0 2rem;
+      border-radius: 0 4px 4px 0;
+      max-width: 64ch;
+    }
+    .hero-statement strong { color: var(--accent); }
+    h2 {
+      font-size: 1.2rem;
+      font-weight: 700;
+      margin: 2.5rem 0 0.75rem;
+      padding-bottom: 0.3rem;
       border-bottom: 1px solid var(--rule);
+      scroll-margin-top: 4rem;
     }
+    h2 .num { color: var(--muted); font-weight: 400; margin-right: 0.5rem; }
     h3 {
-      font-size: 0.95rem;
+      font-size: 1rem;
       font-weight: 600;
-      margin: 1.4rem 0 0.4rem;
+      margin: 1.5rem 0 0.4rem;
+      color: var(--fg-soft);
     }
-    p, ul, ol { margin: 0.55rem 0; }
+    p, ul, ol { margin: 0.6rem 0; }
     ul, ol { padding-left: 1.5rem; }
-    li { margin: 0.15rem 0; }
+    li { margin: 0.2rem 0; }
     a { color: var(--link); text-decoration: none; }
     a:hover { text-decoration: underline; }
     code {
@@ -78,22 +105,23 @@
     }
     pre {
       background: var(--code-bg);
-      padding: 0.85rem 1rem;
+      padding: 0.9rem 1.1rem;
       border-radius: 4px;
       overflow-x: auto;
       font-size: 0.9em;
       line-height: 1.5;
+      margin: 0.6rem 0 1rem;
     }
     pre code { background: none; padding: 0; }
     table {
       border-collapse: collapse;
-      margin: 0.5rem 0 1rem;
+      margin: 0.5rem 0 1.2rem;
       font-size: 0.93em;
       width: 100%;
     }
     th, td {
       border-bottom: 1px solid var(--rule);
-      padding: 0.35rem 0.85rem 0.35rem 0;
+      padding: 0.4rem 0.85rem 0.4rem 0;
       text-align: left;
       vertical-align: top;
     }
@@ -101,13 +129,16 @@
     .grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 0.8rem;
-      margin: 1rem 0;
+      gap: 0.9rem;
+      margin: 0.8rem 0 1.5rem;
+    }
+    @media (max-width: 700px) {
+      .grid { grid-template-columns: 1fr; }
     }
     .card {
       border: 1px solid var(--rule);
       border-radius: 5px;
-      padding: 0.85rem 1rem;
+      padding: 0.9rem 1.1rem;
       background: #fff;
     }
     .card strong { display: block; margin-bottom: 0.25rem; }
@@ -116,14 +147,42 @@
       display: inline-block;
       background: var(--accent);
       color: #fff;
-      padding: 0.35rem 0.8rem;
+      padding: 0.5rem 1rem;
       border-radius: 4px;
       font-weight: 500;
-      margin: 0.4rem 0.6rem 0.4rem 0;
+      margin: 0.4rem 0.5rem 0.4rem 0;
+      font-size: 0.95em;
     }
     .cta:hover { background: #5a3199; text-decoration: none; }
     .cta.alt { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
-    .cta.alt:hover { background: #efeaf5; }
+    .cta.alt:hover { background: var(--accent-soft); }
+    nav.toc {
+      background: var(--bg-alt);
+      border: 1px solid var(--rule);
+      border-radius: 4px;
+      padding: 0.9rem 1.1rem;
+      margin: 1.5rem 0 2rem;
+      font-size: 0.92em;
+    }
+    nav.toc h4 {
+      margin: 0 0 0.4rem;
+      font-size: 0.9em;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--muted);
+    }
+    nav.toc ol { padding-left: 1.4rem; margin: 0.3rem 0; columns: 2; column-gap: 1.5rem; }
+    nav.toc li { break-inside: avoid; }
+    .endpoint {
+      display: inline-block;
+      font-weight: 600;
+      padding: 0.1rem 0.4rem;
+      border-radius: 3px;
+      font-size: 0.92em;
+      background: var(--code-bg);
+    }
+    .endpoint.get  { color: var(--green); }
+    .endpoint.post { color: var(--red); }
     footer {
       margin-top: 4rem;
       padding-top: 1rem;
@@ -131,150 +190,540 @@
       color: var(--muted);
       font-size: 0.85em;
     }
+    .commit {
+      background: var(--bg-alt);
+      border-left: 3px solid var(--accent);
+      padding: 0.5rem 0.9rem;
+      margin: 0.4rem 0;
+    }
+    .badge {
+      display: inline-block;
+      font-size: 0.8em;
+      padding: 0.05rem 0.4rem;
+      border-radius: 3px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-weight: 600;
+    }
   </style>
 </head>
 <body>
   <header class="site">
-    <span>memories.apexpots.com</span>
-    <span>v0.1.0 · binds to <code>donto 0.1.0-m10</code></span>
+    <span><strong>memories.apexpots.com</strong> · v0.1.0 · contract <code>0.1.0-m10</code></span>
+    <span class="links">
+      <a href="#quickstart">quickstart</a>
+      <a href="/docs">docs</a>
+      <a href="/agent.md">agent guide</a>
+      <a href="/openapi.json">openapi</a>
+      <a href="https://github.com/thomasdavis/donto-memory">github</a>
+    </span>
   </header>
 
-  <h1><span class="accent">donto-memory</span></h1>
-  <p class="tagline">
-    Agentic-memory runtime that runs on top of the
-    <a href="https://github.com/thomasdavis/donto">donto</a> evidence
-    substrate. Bitemporal. Paraconsistent. Policy-gated recall. No
-    silent rewrites.
-  </p>
+  <main>
+    <h1><span class="accent">donto-memory</span></h1>
+    <p class="tagline">
+      Persistent memory for AI agents — built on the
+      <a href="https://github.com/thomasdavis/donto">donto</a> evidence
+      substrate. Bitemporal. Paraconsistent. Policy-gated. No silent
+      rewrites.
+    </p>
 
-  <p>
-    <a class="cta" href="/docs">Open API docs</a>
-    <a class="cta alt" href="/openapi.json">Raw OpenAPI</a>
-    <a class="cta alt" href="https://github.com/thomasdavis/donto-memory">GitHub</a>
-  </p>
-
-  <h2>three commitments</h2>
-  <ol>
-    <li>
-      <strong>No silent rewrite.</strong> Reconsolidation derives new
-      claims from recalled ones — it never overwrites originals. The
-      original chunks remain queryable forever; derived summaries are
-      additional claims with a <code>supersedes</code> argument edge
-      back to the source.
-    </li>
-    <li>
-      <strong>Read events are not belief events.</strong> A recall
-      bumps a counter in <code>donto_x_memory_access</code> (overlay),
-      not anywhere in the substrate&rsquo;s <code>donto_statement</code>
-      table. Bitemporal discipline preserved: <code>tx_time</code>
-      reflects belief, not access.
-    </li>
-    <li>
-      <strong>Policy-aware by default.</strong> Every recall passes a
-      holder agent and an action through to <code>POST /recall</code>
-      on the substrate. The substrate returns rows the holder is
-      attested for; donto-memory passes them through unchanged.
-    </li>
-  </ol>
-
-  <h2>memory modules</h2>
-  <p>Three plug-in modules ship by default; consumers may add more.</p>
-  <div class="grid">
-    <div class="card">
-      <strong>episodic</strong>
-      <small>token · experiential</small>
-      <p>Verbatim event/chunk recall — the raw user-utterance store.
-        Each ingest writes one <code>mem:episodic/chunk</code>
-        statement with the raw text as a literal.</p>
+    <div class="hero-statement">
+      <strong>If you are an AI agent</strong> reading this page: you have
+      two endpoints to know. <code>POST /memorize</code> takes raw text
+      and stores it — plus ~50–250 ontological statements an LLM extracts
+      from it. <code>POST /recall</code> takes a query and returns
+      everything we know that matches, with policy + ranking applied.
+      Read <a href="/agent.md">the agent guide</a> for the full
+      contract.
     </div>
-    <div class="card">
-      <strong>semantic-claim</strong>
-      <small>structured · factual</small>
-      <p>Extracted typed claims (subject / predicate / object). Each
-        claim becomes one substrate statement; records anchor to the
-        <code>statement_id</code>.</p>
-    </div>
-    <div class="card">
-      <strong>preference</strong>
-      <small>structured · preference</small>
-      <p>User preferences. Every update is a new statement plus a
-        <code>supersedes</code> argument edge to the prior value.
-        Both live forever; recall returns the latest.</p>
-    </div>
-  </div>
 
-  <h2>quick start</h2>
-  <pre><code># Health.
-curl -s https://memories.apexpots.com/health
+    <p>
+      <a class="cta" href="#quickstart">Quick start</a>
+      <a class="cta alt" href="/agent.md">Agent guide (markdown)</a>
+      <a class="cta alt" href="/docs">Swagger UI</a>
+      <a class="cta alt" href="/openapi.json">OpenAPI 3.1</a>
+      <a class="cta alt" href="https://github.com/thomasdavis/donto-memory">GitHub</a>
+    </p>
 
-# Ingest into the episodic module.
-curl -s -X POST https://memories.apexpots.com/ingest/episodic \
+    <nav class="toc">
+      <h4>contents</h4>
+      <ol>
+        <li><a href="#what">What this is</a></li>
+        <li><a href="#commitments">Three commitments</a></li>
+        <li><a href="#quickstart">Quickstart</a></li>
+        <li><a href="#save">How save works</a></li>
+        <li><a href="#recall">How recall works</a></li>
+        <li><a href="#modules">Memory modules</a></li>
+        <li><a href="#api">API surface</a></li>
+        <li><a href="#lens">Identity lenses</a></li>
+        <li><a href="#bitemporal">Bitemporal time-travel</a></li>
+        <li><a href="#policy">Policy actions</a></li>
+        <li><a href="#cost">Cost expectations</a></li>
+        <li><a href="#failures">Failure modes</a></li>
+        <li><a href="#architecture">Architecture</a></li>
+        <li><a href="#substrate">Substrate handshake</a></li>
+        <li><a href="#cookbook">Cookbook</a></li>
+        <li><a href="#dontdo">Things NOT to do</a></li>
+      </ol>
+    </nav>
+
+    <!-- =================================================================== -->
+    <h2 id="what"><span class="num">1</span>What this is</h2>
+    <p>
+      A persistent memory layer for long-lived AI agents. You write
+      memories as plain text. We store the text
+      <em>and</em> break it down into typed ontological statements
+      using an LLM, save everything to the substrate, and serve it back
+      on recall — with policy gating, identity-lens resolution, and
+      bitemporal time-travel for free.
+    </p>
+
+    <h3>The shape of a memory</h3>
+    <p>
+      When you call <code>POST /memorize</code> with one sentence of
+      text, you get back ~30 facts. With a paragraph, ~100–250. Each
+      fact is a typed triple
+      <code>(subject, predicate, object)</code> the substrate stores
+      with full bitemporal provenance.
+    </p>
+    <p>
+      Example. You send:
+      <em>"I met Annie Davis at the Cooktown Festival in October 1979."</em>
+    </p>
+    <p>
+      The substrate gets:
+    </p>
+    <pre><code>(agent:you,        ex:met,         person:annie-davis)
+(agent:you,        ex:metAt,       event:cooktown-festival-1979)
+(person:annie-davis, rdf:type,     ex:Person)
+(person:annie-davis, ex:hasName,   "Annie Davis")
+(event:cooktown-festival-1979, rdf:type, ex:Festival)
+(event:cooktown-festival-1979, ex:occurredAt, "1979-10")
+(event:cooktown-festival-1979, ex:locatedIn,  place:cooktown)
+(place:cooktown, rdf:type, ex:Place)
+... and ~50 more from the inferential + conceivable apertures</code></pre>
+
+    <h3>What this is NOT</h3>
+    <ul>
+      <li><strong>Not a vector database.</strong> We use predicate
+        alignment + identity lenses for semantic similarity. Vector
+        embeddings are an optional follow-on (M11.x).</li>
+      <li><strong>Not a chat history.</strong> You <em>can</em> dump
+        every turn in via <code>/memorize</code>, but the value-add is
+        the structured recall, the contradiction handling, and the
+        policy gate.</li>
+      <li><strong>Not a model.</strong> We store facts about what your
+        user has said, what you've inferred, what your user prefers.
+        The reasoning still happens in you.</li>
+    </ul>
+
+    <!-- =================================================================== -->
+    <h2 id="commitments"><span class="num">2</span>Three commitments</h2>
+    <ol>
+      <li>
+        <strong>No silent rewrite.</strong> Reconsolidation derives new
+        claims from recalled ones — it never overwrites originals. The
+        original chunks remain queryable forever; derived summaries are
+        additional claims with a <code>supersedes</code> argument edge
+        back to the source.
+      </li>
+      <li>
+        <strong>Read events are not belief events.</strong> A recall
+        bumps a counter in <code>donto_x_memory_access</code>, not
+        anywhere in the substrate's <code>donto_statement</code> table.
+        Bitemporal discipline preserved: <code>tx_time</code> reflects
+        belief, not access.
+      </li>
+      <li>
+        <strong>Policy-aware by default.</strong> Every recall passes a
+        holder agent and an action through to <code>POST /recall</code>
+        on the substrate. The substrate returns rows the holder is
+        attested for; donto-memory passes them through unchanged.
+      </li>
+    </ol>
+
+    <!-- =================================================================== -->
+    <h2 id="quickstart"><span class="num">3</span>Quickstart</h2>
+    <p>The minimal save-and-recall loop, in 30 seconds:</p>
+    <pre><code># Save a memory. We extract ~80-250 ontological statements
+# (z-ai/glm-5 via OpenRouter, five parallel "apertures").
+curl -X POST https://memories.apexpots.com/memorize \
   -H 'Content-Type: application/json' \
   -d '{
-    "holder": "agent:ajax",
-    "session_id": "s-2026-05-28",
-    "text": "I met Annie Davis at the Cooktown Festival in 1979."
+    "holder":     "agent:my-bot",
+    "session_id": "conversation-2026-05-28",
+    "text":       "The user told me they prefer vegetarian restaurants and live in Brooklyn."
   }'
 
-# Recall — Memory Evidence Bundle.
-curl -s -X POST https://memories.apexpots.com/recall \
+# Recall.
+curl -X POST https://memories.apexpots.com/recall \
   -H 'Content-Type: application/json' \
   -d '{
-    "holder": "agent:ajax",
-    "action": "read_content",
-    "query": "Annie Davis",
-    "limit": 20,
-    "permitted_only": true
+    "holder":     "agent:my-bot",
+    "action":     "read_content",
+    "query":      "vegetarian",
+    "limit":      20
   }'</code></pre>
+    <p>That's the whole loop. Read the rest of this page for the deep
+       contract.</p>
 
-  <h2>architecture</h2>
-  <p>
-    donto-memory is two long-running processes plus five overlay
-    tables in the substrate's database:
-  </p>
-  <table>
-    <tr><th>Process</th><th>Role</th></tr>
-    <tr><td><code>donto-memory api</code></td><td>FastAPI-equivalent axum server. Ingest + recall.</td></tr>
-    <tr><td><code>donto-memory worker</code></td><td>Sleep-path drain of the reconsolidation queue.</td></tr>
-  </table>
-  <table>
-    <tr><th>Overlay table</th><th>Role</th></tr>
-    <tr><td><code>donto_x_memory_module</code></td><td>Registered modules.</td></tr>
-    <tr><td><code>donto_x_memory_record</code></td><td>One row per unit of memory.</td></tr>
-    <tr><td><code>donto_x_memory_access</code></td><td>Append-only access events.</td></tr>
-    <tr><td><code>donto_x_memory_state</code></td><td>Bitemporal-versioned recall state.</td></tr>
-    <tr><td><code>donto_x_memory_reconsolidation_queue</code></td><td>Sleep-path work items.</td></tr>
-  </table>
+    <!-- =================================================================== -->
+    <h2 id="save"><span class="num">4</span>How save works</h2>
+    <p>
+      <code>POST /memorize</code> performs four steps in order:
+    </p>
+    <ol>
+      <li>
+        <strong>Episodic storage.</strong> Your raw text is asserted
+        verbatim as a <code>mem:episodic/chunk</code> statement under
+        <code>ctx:memory/episodic/session/&lt;session_id&gt;</code>.
+        This is the canonical bytes-on-disk record of what you sent.
+      </li>
+      <li>
+        <strong>LLM extraction.</strong> The default model
+        (<code>z-ai/glm-5</code>) processes the chunk via one of two
+        modes:
+        <ul>
+          <li><span class="badge">single</span> One prompt. ~20-40 facts.
+            ~5-10 s.</li>
+          <li><span class="badge">exhaustive</span> Five parallel prompts.
+            ~80-250 facts. ~30-90 s. <strong>This is the default.</strong></li>
+        </ul>
+      </li>
+      <li>
+        <strong>Semantic ingest.</strong> Every extracted fact becomes
+        a typed statement filed under
+        <code>ctx:memory/claims/session/&lt;session_id&gt;</code>,
+        linked back to the episodic chunk via
+        <code>mem:claim/derived_from</code>.
+      </li>
+      <li>
+        <strong>Receipt.</strong> You receive the episodic record IDs,
+        every semantic record ID, the per-aperture yields, and the LLM
+        token usage. See the
+        <a href="/agent.md#post-memorize">agent guide reference</a> for
+        the full response shape.
+      </li>
+    </ol>
 
-  <h2>substrate handshake</h2>
-  <p>
-    donto-memory <em>requires</em> a donto substrate at contract
-    version <code>0.1.0-m10</code> or higher. The handshake at
-    startup checks <code>GET /discovery/contract-version</code> and
-    refuses to run against an older substrate.
-  </p>
+    <h3>The five apertures (exhaustive mode)</h3>
+    <p>
+      Each aperture is an independent LLM call with its own system
+      prompt and confidence band. Substrate's content-hash dedup runs
+      across the union.
+    </p>
+    <table>
+      <tr><th>Aperture</th><th>Captures</th><th>Confidence</th><th>Modality</th></tr>
+      <tr><td><strong>surface</strong></td><td>What the text explicitly states.</td><td>0.95–1.0</td><td>asserted</td></tr>
+      <tr><td><strong>linguistic</strong></td><td>Clause decomposition. Every NP→entity, VP→event, modifier→property.</td><td>0.85–1.0</td><td>asserted</td></tr>
+      <tr><td><strong>presupposition</strong></td><td>What the text takes for granted.</td><td>0.7–0.95</td><td>hypothesis_only</td></tr>
+      <tr><td><strong>inferential</strong></td><td>Common-knowledge consequences of stated facts.</td><td>0.4–0.7</td><td>inferred</td></tr>
+      <tr><td><strong>conceivable</strong></td><td>Claims that could plausibly hold given entity types.</td><td>~0.85</td><td>hypothesis_only</td></tr>
+    </table>
 
-  <h2>not what this is</h2>
-  <ul>
-    <li>donto-memory is <strong>not a model</strong>. It stores facts about what an agent has been told, what it has inferred, and what its user prefers. The reasoning still happens elsewhere.</li>
-    <li>donto-memory is <strong>not a vector store</strong>. It uses donto's predicate alignment + identity-lens machinery for semantic-similar lookups. Vector embeddings are an optional follow-on.</li>
-    <li>donto-memory is <strong>not a chat history</strong>. Episodic memory <em>can</em> store chat turns, but the value-add over a plain transcript is the bitemporal, policy-gated, contradiction-preserving recall.</li>
-  </ul>
+    <!-- =================================================================== -->
+    <h2 id="recall"><span class="num">5</span>How recall works</h2>
+    <p>
+      <code>POST /recall</code> performs six steps:
+    </p>
+    <ol>
+      <li><strong>Module dispatch.</strong> Every enabled module runs
+        its own retrieval against the substrate.</li>
+      <li><strong>Policy gate.</strong> Every candidate row passes
+        through the substrate's Trust Kernel. If <code>holder</code> is
+        not attested for <code>action</code> on the row's source
+        policy, <code>action_allowed=false</code>.</li>
+      <li><strong>Identity-lens resolution.</strong> If
+        <code>lens_name</code> is set, the substrate returns the
+        cluster representative for each subject/object.</li>
+      <li><strong>Bitemporal time-travel.</strong> If
+        <code>as_of_tx</code> is set, you get the rows the substrate
+        believed at that timestamp.</li>
+      <li><strong>Fusion.</strong> Module candidates merge via
+        Reciprocal Rank Fusion (k=60). Cross-module overlap boosts
+        rank.</li>
+      <li><strong>Side effects.</strong> Each row writes an access
+        event + bumps recall state + enqueues a reconsolidation task.
+        None of these touch substrate belief state.</li>
+    </ol>
 
-  <h2>links</h2>
-  <ul>
-    <li><a href="/docs">Interactive API documentation</a> (Swagger UI)</li>
-    <li><a href="/openapi.json">OpenAPI 3.1 JSON</a></li>
-    <li><a href="https://github.com/thomasdavis/donto-memory">GitHub repository</a></li>
-    <li><a href="https://github.com/thomasdavis/donto">donto substrate</a></li>
-    <li><a href="https://genes.apexpots.com/research/donto-substrate-prd-2026-05-28.html">substrate PRD (M10 substrate hardening)</a></li>
-    <li><a href="https://genes.apexpots.com/research/donto-paper-2026-05-28.html">donto systems paper</a></li>
-  </ul>
+    <!-- =================================================================== -->
+    <h2 id="modules"><span class="num">6</span>Memory modules</h2>
+    <p>Three modules ship by default. Each defines a particular memory
+       form + function and contributes to recall via its own retrieve
+       method.</p>
+    <div class="grid">
+      <div class="card">
+        <strong>episodic</strong>
+        <small>token · experiential</small>
+        <p>Verbatim event/chunk recall. Each ingest writes one
+          <code>mem:episodic/chunk</code> statement with the raw text
+          as a literal. Use for raw user utterances.</p>
+      </div>
+      <div class="card">
+        <strong>semantic-claim</strong>
+        <small>structured · factual</small>
+        <p>Extracted typed claims. Each becomes one substrate statement
+          with <code>source_record_iri</code> back to the episodic.
+          Use for structured facts you already have.</p>
+      </div>
+      <div class="card">
+        <strong>preference</strong>
+        <small>structured · preference</small>
+        <p>User preferences. Updates are append-only: a new value
+          creates a new statement plus a <code>supersedes</code>
+          argument edge to the prior. Both live forever; recall returns
+          the latest.</p>
+      </div>
+    </div>
 
-  <footer>
-    donto-memory v0.1.0 · Apache-2.0 OR MIT · Generated by the
-    binary; no static build step. Source:
-    <a href="https://github.com/thomasdavis/donto-memory">github.com/thomasdavis/donto-memory</a>.
-  </footer>
+    <!-- =================================================================== -->
+    <h2 id="api"><span class="num">7</span>API surface</h2>
+    <p>13 endpoints. Full schemas in <a href="/openapi.json">openapi.json</a>;
+       interactive in <a href="/docs">Swagger UI</a>.</p>
+    <table>
+      <tr><th>Endpoint</th><th>Purpose</th></tr>
+      <tr><td><span class="endpoint get">GET</span> <code>/</code></td><td>This homepage</td></tr>
+      <tr><td><span class="endpoint get">GET</span> <code>/health</code></td><td>Liveness</td></tr>
+      <tr><td><span class="endpoint get">GET</span> <code>/version</code></td><td>Service version + substrate contract floor</td></tr>
+      <tr><td><span class="endpoint get">GET</span> <code>/substrate</code></td><td>Echo substrate /discovery handshake</td></tr>
+      <tr><td><span class="endpoint get">GET</span> <code>/modules</code></td><td>Registered memory modules</td></tr>
+      <tr><td><span class="endpoint post">POST</span> <code>/memorize</code></td><td><strong>The save endpoint.</strong> Episodic + LLM extraction.</td></tr>
+      <tr><td><span class="endpoint post">POST</span> <code>/memorize/batch</code></td><td>Same flow for multiple items</td></tr>
+      <tr><td><span class="endpoint post">POST</span> <code>/ingest/{module}</code></td><td>Bypass LLM. Direct module write.</td></tr>
+      <tr><td><span class="endpoint post">POST</span> <code>/recall</code></td><td><strong>The read endpoint.</strong> Memory Evidence Bundle.</td></tr>
+      <tr><td><span class="endpoint post">POST</span> <code>/reconsolidate/enqueue</code></td><td>Manually queue a record for sleep-path processing</td></tr>
+      <tr><td><span class="endpoint get">GET</span> <code>/reconsolidate/queue</code></td><td>Head-of-queue inspector</td></tr>
+      <tr><td><span class="endpoint get">GET</span> <code>/openapi.json</code></td><td>OpenAPI 3.1 spec</td></tr>
+      <tr><td><span class="endpoint get">GET</span> <code>/docs</code></td><td>Swagger UI</td></tr>
+      <tr><td><span class="endpoint get">GET</span> <code>/agent.md</code></td><td>Markdown guide aimed at AI agents</td></tr>
+      <tr><td><span class="endpoint get">GET</span> <code>/llms.txt</code></td><td>Same content as <code>/agent.md</code>, plain text</td></tr>
+    </table>
+
+    <!-- =================================================================== -->
+    <h2 id="lens"><span class="num">8</span>Identity lenses</h2>
+    <p>
+      The substrate stores every entity reference verbatim. When two
+      references actually refer to the same real-world entity, that's
+      recorded as a weighted identity edge — never collapsed at
+      storage. At query time, the <strong>identity lens</strong>
+      parameter controls how strict the equivalence judgement is.
+    </p>
+    <p>Default seeded lenses:</p>
+    <ul>
+      <li><code>strict_identity_v1</code> — only edges with confidence ≥ 0.98.</li>
+      <li><code>likely_identity_v1</code> — ≥ 0.85.</li>
+      <li><code>exploratory_identity_v1</code> — ≥ 0.60.</li>
+    </ul>
+    <p>
+      Most agent workloads should leave <code>lens_name: null</code> —
+      no expansion. Use <code>likely_identity_v1</code> when surfacing
+      memories about a person whose name varies across sources.
+    </p>
+
+    <!-- =================================================================== -->
+    <h2 id="bitemporal"><span class="num">9</span>Bitemporal time-travel</h2>
+    <p>Every claim has two times:</p>
+    <ul>
+      <li><code>valid_time</code> — when the fact was true in the world.</li>
+      <li><code>tx_time</code> — when we believed it.</li>
+    </ul>
+    <p>
+      Recall with <code>"as_of_tx": "2026-05-01T00:00:00Z"</code>
+      returns the rows that were <em>currently believed</em> on that
+      date. If a fact was retracted on 2026-05-15, an
+      <code>as_of_tx=2026-05-10</code> query still sees it. This is the
+      <em>"what did we know on date X?"</em> pattern.
+    </p>
+
+    <!-- =================================================================== -->
+    <h2 id="policy"><span class="num">10</span>Policy actions</h2>
+    <p>
+      Every recall asks for a specific action. The substrate gates each
+      row based on the source's policy capsule + the holder's
+      attestation. Sixteen actions:
+    </p>
+    <table>
+      <tr><th>Action</th><th>When to ask</th></tr>
+      <tr><td><code>read_metadata</code></td><td>See that the row exists. Default-permitted.</td></tr>
+      <tr><td><code>read_content</code></td><td>Read actual values. The common agent recall case.</td></tr>
+      <tr><td><code>quote</code></td><td>Include verbatim in a user-visible answer.</td></tr>
+      <tr><td><code>view_anchor_location</code></td><td>See <em>where in the source</em> the claim was extracted.</td></tr>
+      <tr><td><code>derive_claims</code></td><td>Extract new derived statements.</td></tr>
+      <tr><td><code>derive_embeddings</code></td><td>Generate embeddings.</td></tr>
+      <tr><td><code>translate</code></td><td>Translate the content.</td></tr>
+      <tr><td><code>summarize</code></td><td>Produce a summary.</td></tr>
+      <tr><td><code>export_claims</code></td><td>Include in a release.</td></tr>
+      <tr><td><code>train_model</code></td><td>Use in model training.</td></tr>
+      <tr><td><code>publish_release</code></td><td>Include in a citable release.</td></tr>
+      <tr><td><code>share_with_third_party</code></td><td>Pass to another agent/system.</td></tr>
+      <tr><td><code>federated_query</code></td><td>Cross-instance read.</td></tr>
+      <tr><td><code>request_deletion</code></td><td>Initiate tombstoning. Heavy.</td></tr>
+    </table>
+    <p>Most agent workflows want <code>read_content</code> (or
+       <code>quote</code> if you'll be showing the text directly).</p>
+
+    <!-- =================================================================== -->
+    <h2 id="cost"><span class="num">11</span>Cost expectations</h2>
+    <p>LLM token cost dominates <code>/memorize</code>. Recall is free
+       of LLM cost.</p>
+    <table>
+      <tr><th>Mode</th><th>LLM calls</th><th>Tokens</th><th>~Cost (OpenRouter glm-5)</th><th>Latency</th></tr>
+      <tr><td><code>single</code></td><td>1</td><td>~300 + ~3-8K</td><td>$0.005–$0.015</td><td>5–10 s</td></tr>
+      <tr><td><code>exhaustive</code></td><td>5 parallel</td><td>~1.8K + ~15-25K</td><td>$0.04–$0.07</td><td>30–90 s</td></tr>
+    </table>
+    <p>
+      Recall typically completes in under 100 ms on the standard
+      hardware (the substrate side dominates; we add ~10-20 ms of fusion
+      + access bookkeeping).
+    </p>
+
+    <!-- =================================================================== -->
+    <h2 id="failures"><span class="num">12</span>Failure modes</h2>
+    <table>
+      <tr><th>Symptom</th><th>Cause</th><th>Fix</th></tr>
+      <tr><td>400 Bad Request</td><td>Missing/empty <code>text</code></td><td>Send non-empty text</td></tr>
+      <tr><td>500 + warnings</td><td>LLM call failed; episodic still saved</td><td>Retry or enqueue reconsolidation</td></tr>
+      <tr><td>Timeout</td><td>Exhaustive mode takes 30–90 s</td><td>Use <code>mode=single</code> for low-latency paths</td></tr>
+      <tr><td>Recall returns 0 rows for a memory you just saved</td><td>Wrong holder/session/filter</td><td>Drop the filter, verify holder match</td></tr>
+      <tr><td>Every row has <code>action_allowed=false</code></td><td>Default policy is fail-closed for content-exposing actions</td><td>Request <code>read_metadata</code> (always allowed) or get an attestation</td></tr>
+    </table>
+    <p>
+      Retries are safe. The substrate dedups by content hash; repeated
+      <code>/memorize</code> of the same chunk produces only one
+      episodic statement. Semantic extraction may produce variant facts
+      on each call but won't contradict — donto preserves contradictions
+      if they happen.
+    </p>
+
+    <!-- =================================================================== -->
+    <h2 id="architecture"><span class="num">13</span>Architecture</h2>
+    <pre><code>┌────────────────────────────────────────────────────────────┐
+│  donto-memory (single Rust binary, three subcommands)      │
+│                                                            │
+│   donto-memory api      donto-memory worker                │
+│   (axum :7900)          (tokio loop, queue drain)          │
+│           │                       │                        │
+│           ▼                       ▼                        │
+│   ┌────────────────────────────────────────────────────┐   │
+│   │   donto_memory_core (library)                      │   │
+│   │   modules: episodic / semantic-claim / preference  │   │
+│   │   hot_path: recall composer + RRF fusion           │   │
+│   │   sleep_path: reflect + apply DontoDelta           │   │
+│   │   substrate: reqwest → dontosrv                    │   │
+│   │   overlays: tokio-postgres helpers                 │   │
+│   │   extract: 5-aperture LLM via OpenAI-compatible    │   │
+│   └────────────────────────┬───────────────────────────┘   │
+└────────────────────────────┼───────────────────────────────┘
+                             ▼
+                ┌─────────────────────────────┐
+                │   donto (substrate)         │
+                │   dontosrv :7879            │
+                │   any donto instance        │
+                └─────────────────────────────┘</code></pre>
+    <p>Two long-running processes plus five overlay tables in the
+       substrate's database:</p>
+    <table>
+      <tr><th>Overlay table</th><th>Role</th></tr>
+      <tr><td><code>donto_x_memory_module</code></td><td>Registered modules</td></tr>
+      <tr><td><code>donto_x_memory_record</code></td><td>One row per unit of memory</td></tr>
+      <tr><td><code>donto_x_memory_access</code></td><td>Append-only access events</td></tr>
+      <tr><td><code>donto_x_memory_state</code></td><td>Bitemporal-versioned recall state</td></tr>
+      <tr><td><code>donto_x_memory_reconsolidation_queue</code></td><td>Sleep-path work items</td></tr>
+    </table>
+
+    <!-- =================================================================== -->
+    <h2 id="substrate"><span class="num">14</span>Substrate handshake</h2>
+    <p>
+      donto-memory <em>requires</em> a donto substrate at contract
+      version <code>0.1.0-m10</code> or higher. The handshake at startup
+      checks <code>GET /discovery/contract-version</code> on the
+      substrate and refuses to run against an older substrate.
+    </p>
+    <p>
+      You can verify the binding with <code>GET /substrate</code> on
+      donto-memory — it echoes the substrate's
+      <code>/discovery/contract-version</code> and
+      <code>/discovery/substrate-health</code> responses.
+    </p>
+
+    <!-- =================================================================== -->
+    <h2 id="cookbook"><span class="num">15</span>Cookbook</h2>
+
+    <h3>Long-term user profile</h3>
+    <pre><code>// Whenever the user shares a profile fact, memorize it.
+fetch("/memorize", { method: "POST", body: JSON.stringify({
+  holder:     "agent:my-bot",
+  session_id: `user/${user_id}`,
+  text:       user_message,
+  mode:       "exhaustive"
+})});
+
+// Before generating a response, recall.
+const bundle = await fetch("/recall", { method: "POST", body: JSON.stringify({
+  holder:     "agent:my-bot",
+  session_id: `user/${user_id}`,
+  action:     "read_content",
+  limit:      50
+})}).then(r => r.json());</code></pre>
+
+    <h3>Preference tracking</h3>
+    <pre><code>// When the user says "I prefer X", use the preference module directly.
+await fetch("/ingest/preference", { method: "POST", body: JSON.stringify({
+  holder: "agent:my-bot",
+  key:    "preferred_tone",
+  value:  "casual"
+})});
+
+// Later, retrieve.
+const prefs = await fetch("/recall", { method: "POST", body: JSON.stringify({
+  holder:      "agent:my-bot",
+  module_iris: ["mem:module/preference"],
+  limit:       100
+})}).then(r => r.json());</code></pre>
+
+    <h3>"What did I know last Tuesday?"</h3>
+    <pre><code>const bundle = await fetch("/recall", { method: "POST", body: JSON.stringify({
+  holder:   "agent:my-bot",
+  as_of_tx: "2026-05-21T00:00:00Z",
+  subject:  "ex:annie-davis"
+})}).then(r => r.json());</code></pre>
+
+    <h3>Semantic-similar across aliases</h3>
+    <pre><code>const bundle = await fetch("/recall", { method: "POST", body: JSON.stringify({
+  holder:    "agent:my-bot",
+  lens_name: "likely_identity_v1",
+  subject:   "ex:annie-davis"
+})}).then(r => r.json());
+// Returns rows about the canonical Annie + her known aliases
+// (Mrs Watson, Mary Watson, etc.) under the `likely` identity lens.</code></pre>
+
+    <!-- =================================================================== -->
+    <h2 id="dontdo"><span class="num">16</span>Things NOT to do</h2>
+    <ul>
+      <li><strong>Don't try to delete memories.</strong> Donto is
+        append-only. Tombstoning (true deletion) requires an
+        attestation and goes through the substrate, not this API.</li>
+      <li><strong>Don't include API keys or secrets in text.</strong>
+        Memories are persisted forever.</li>
+      <li><strong>Don't memorize the same chunk repeatedly to "boost"
+        recall.</strong> Donto dedups at the content-hash level.</li>
+      <li><strong>Don't rely on <code>mode: "exhaustive"</code> for
+        sub-second latency.</strong> Five parallel LLM calls still take
+        30–90 s.</li>
+      <li><strong>Don't bypass <code>/memorize</code> unless you
+        mean it.</strong> Direct <code>/ingest/semantic-claim</code>
+        calls produce claims with no episodic anchor — downstream
+        provenance trace cannot follow the chain back.</li>
+    </ul>
+
+    <footer>
+      donto-memory v0.1.0 · contract <code>0.1.0-m10</code> · Apache-2.0
+      OR MIT · Built on the <a href="https://github.com/thomasdavis/donto">donto</a>
+      evidence substrate ·
+      <a href="https://github.com/thomasdavis/donto-memory">source</a>
+    </footer>
+  </main>
 </body>
 </html>

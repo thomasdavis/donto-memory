@@ -1,0 +1,744 @@
+# donto-memory — guide for AI agents
+
+You are an AI agent. This document is your manual for using
+**donto-memory** as a persistent memory layer. Read it once and
+keep it referenced; everything you need is below.
+
+**Contract version:** `0.1.0-m10`
+**Base URL:** `https://memories.apexpots.com`
+**License:** Apache-2.0 OR MIT.
+
+---
+
+## 0. TL;DR for agents
+
+You have two endpoints to know:
+
+  | Verb | Path | Purpose |
+  |---|---|---|
+  | **POST** | **`/memorize`** | Send what you want remembered. We store the raw text and use an LLM to extract every ontological statement it implies. |
+  | **POST** | **`/recall`** | Send a query and a holder. We return everything we've stored that matches — facts, anchors, contradictions, the chain back to the source. |
+
+That's it. Everything else is optional polish (manual structured
+ingest, identity lenses, bitemporal time-travel, policy gating,
+reconsolidation queue inspection).
+
+### The 30-second quick-start
+
+```bash
+# Save a memory.
+curl -X POST https://memories.apexpots.com/memorize \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "holder": "agent:my-bot",
+    "session_id": "conversation-2026-05-28",
+    "text": "The user told me they prefer vegetarian restaurants and live in Brooklyn."
+  }'
+
+# Recall it.
+curl -X POST https://memories.apexpots.com/recall \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "holder": "agent:my-bot",
+    "action": "read_content",
+    "query": "vegetarian",
+    "limit": 20
+  }'
+```
+
+The first call returned ~50-200 facts the LLM extracted. The second
+call surfaced them all with policy + ranking applied.
+
+---
+
+## 1. What this is, and what it is NOT
+
+### What this is
+
+A persistent memory layer for long-lived AI agents. You write
+memories as plain text. We store the text *and* break it down into
+typed ontological statements via an LLM, save everything to the
+underlying [donto](https://github.com/thomasdavis/donto) evidence
+substrate, and serve it back to you on recall — with policy
+gating, identity-lens resolution, and bitemporal time-travel for
+free.
+
+### What this is NOT
+
+  - **Not a vector database.** We use predicate alignment + identity
+    lenses for semantic similarity. Vector embeddings are an optional
+    follow-on (M11.x).
+  - **Not a chat history.** You *can* dump every turn in via
+    `/memorize`, but the value-add is the structured recall, the
+    contradiction handling, and the policy gate.
+  - **Not a model.** We store facts about what your user has said,
+    what you've inferred, what your user prefers. The reasoning still
+    happens in you.
+  - **Not a sandbox.** Memories you save are *real persistence*,
+    governed by attestations + policy capsules in the substrate. If
+    you save something then change your mind, *write a correction*
+    (a new claim with a `supersedes` argument edge) rather than
+    delete — donto preserves history forever.
+
+### Three commitments we make to you
+
+1. **No silent rewrite.** When you re-memorize a contradicting
+   fact, we don't overwrite the old one. Both live forever. Recall
+   surfaces the latest by default and flags the contradiction. You
+   choose what to do.
+2. **Read events are not belief events.** Calling `/recall` does
+   *not* affect the truth value of any claim. It bumps a private
+   recall counter so reconsolidation can prioritise. The substrate's
+   `tx_time` (when we believed something) is untouched.
+3. **Policy-aware by default.** Every recall passes through the
+   substrate's Trust Kernel. If a memory's source policy denies
+   `read_content`, we return the row's metadata but redact its
+   content. You always get a clear signal of what's permitted.
+
+---
+
+## 2. The save-memory contract
+
+When you call `POST /memorize`, this happens:
+
+1. **The raw text is stored** as an *episodic chunk* under your
+   holder's namespace at
+   `ctx:memory/episodic/session/<session_id>`. This is the
+   canonical bytes-on-disk version of what you sent.
+2. **An LLM (default `z-ai/glm-5`) processes the chunk** through
+   one of two modes:
+   - `single` (one prompt, ~20-40 facts, ~5-10 s).
+   - `exhaustive` (five parallel aperture prompts —
+     surface, linguistic, presupposition, inferential,
+     conceivable — ~80-250 facts, ~30-90 s, ~5× tokens). **This is
+     the default**.
+3. **Every extracted fact** is asserted into the substrate as a
+   typed claim `(subject, predicate, object)` with a
+   `source_record_iri` link back to the original episodic chunk.
+4. **You receive** the episodic record IDs + every semantic record
+   ID + per-aperture yields + token usage. Total round-trip on a
+   typical paragraph is 30-90 seconds.
+
+### What gets extracted
+
+The five apertures cover, in increasing speculation:
+
+  - **Surface** — explicitly stated. `"The user lives in Brooklyn"`
+    yields `(user, ex:residesIn, brooklyn)`.
+  - **Linguistic** — every clause decomposed. `"They prefer vegetarian
+    restaurants"` yields type assertions (`user rdf:type ex:Person`,
+    `restaurant rdf:type ex:Restaurant`), the relation itself
+    (`user ex:prefers restaurant`), and properties
+    (`restaurant ex:cuisine vegetarian`).
+  - **Presupposition** — what the chunk takes for granted.
+    `"told me"` presupposes (user exists, agent exists, communication
+    is possible). Marked `hypothesis_only=true`.
+  - **Inferential** — what follows from the stated facts via common
+    knowledge. `"lives in Brooklyn"` yields `(user, ex:locatedIn,
+    new-york-city)`, `(user, ex:locatedIn, usa)`.
+  - **Conceivable** — what could plausibly hold. `(user, ex:hasFingers,
+    10)`, `(restaurant, ex:hasMenu, true)`. Marked `hypothesis_only`.
+
+For a 60-word memory, exhaustive mode typically yields **80-300
+facts**. For a 5-word memory it might yield 15-40.
+
+### When to choose `single` vs `exhaustive`
+
+Pass `"mode": "single"` in the request body if:
+  - You're saving high-volume short chunks (chat turns, log lines).
+  - You need <10 s latency.
+  - You're memorising something you don't expect to query semantically.
+
+Default (`exhaustive`) is correct for:
+  - User preferences, profile facts, dossiers.
+  - Important conversations.
+  - Anything you'll later want to retrieve under a different surface
+    form than how it was originally said.
+
+---
+
+## 3. The recall contract
+
+When you call `POST /recall`, this happens:
+
+1. **Module dispatch.** Every enabled module (`episodic`,
+   `semantic-claim`, `preference`) runs its own retrieval against
+   the substrate. By default, all three modules contribute.
+2. **Policy gate.** Every candidate row passes through the
+   substrate's Trust Kernel. If `holder` is not attested for
+   `action` on the row's source policy, `action_allowed=false`.
+3. **Identity-lens resolution.** If `lens_name` is set, the substrate
+   returns the cluster representative for each subject/object — so
+   queries about "Annie Davis" also surface "Mrs Watson" if a
+   `likely_identity_v1` cluster joins them.
+4. **Bitemporal time-travel.** If `as_of_tx` is set, you get the
+   rows the substrate *believed* at that timestamp. The "what did
+   we know last Tuesday" query.
+5. **Fusion.** Module candidates are merged via Reciprocal Rank
+   Fusion (k=60). A row surfaced by multiple modules ranks higher.
+6. **Side effects.** Each recalled row writes an access event +
+   bumps recall state + enqueues a reconsolidation task. None of
+   these touch the substrate's belief state.
+
+The returned `MemoryEvidenceBundle` includes:
+  - `rows`: ranked list of statements with their full provenance.
+  - `effective_actions`: per-row map of action → allowed boolean.
+  - `action_allowed`: shortcut for the requested action.
+  - `policy_report`: rolled-up policy summary.
+  - `modules_used`: which modules contributed.
+
+---
+
+## 4. Endpoint reference
+
+### `POST /memorize`
+
+Save a memory. Episodic + (optional) LLM extraction.
+
+**Request:**
+```json
+{
+  "holder":      "agent:my-bot",         // required: agent IRI
+  "text":        "...",                   // required: the memory
+  "session_id":  "conversation-id",       // optional: scope
+  "modality":    "model_output",          // optional: see below
+  "extract":     true,                    // optional: false = no LLM
+  "mode":        "exhaustive"             // optional: single | exhaustive
+}
+```
+
+**Response:**
+```json
+{
+  "holder": "agent:my-bot",
+  "session_id": "conversation-id",
+  "episodic_record_id": "uuid",
+  "episodic_record_iri": "ctx:memory/episodic/uuid",
+  "extracted": true,
+  "extract_mode": "exhaustive",
+  "facts_extracted": 244,
+  "facts_ingested": 244,
+  "dedup_collisions": 6,
+  "semantic_record_ids": ["uuid", ...],
+  "model": "z-ai/glm-5",
+  "usage": {
+    "prompt_tokens": 1820,
+    "completion_tokens": 18540,
+    "total_tokens": 20360
+  },
+  "aperture_yields": [
+    { "aperture": "surface",        "raw_facts": 22, "elapsed_ms": 8430 },
+    { "aperture": "linguistic",     "raw_facts": 58, "elapsed_ms": 12100 },
+    { "aperture": "presupposition", "raw_facts": 31, "elapsed_ms": 9210 },
+    { "aperture": "inferential",    "raw_facts": 39, "elapsed_ms": 11380 },
+    { "aperture": "conceivable",    "raw_facts": 100,"elapsed_ms": 18920 }
+  ],
+  "elapsed_ms": 60410,
+  "warnings": []
+}
+```
+
+#### Modality values
+
+The `modality` field tags how the chunk came to exist. Pick one:
+
+  - `model_output` (default) — an LLM produced this. Most chat-agent
+    memories.
+  - `descriptive` — observational. A sensor reading; a database row.
+  - `oral_history` — a person told you this.
+  - `community_protocol` — a community's stated norm.
+  - `inferred` — you derived this from other claims.
+  - `reconstructed` — you partially reconstructed this from
+    incomplete evidence.
+  - `elicited` — you specifically asked a question to get this.
+  - `experimental_result` — output of an experiment.
+  - `clinical_observation` — from a medical/clinical setting.
+
+The substrate uses modality for downstream filtering (queries can
+restrict by modality).
+
+#### Errors
+
+  | Code | Cause |
+  |---|---|
+  | 400 | `text` is empty, or `mode` is not `single`/`exhaustive`. |
+  | 500 | LLM call failed (in `warnings` array, episodic still saved). |
+
+If the LLM is unconfigured server-side, `facts_extracted = 0` and
+`warnings` contains `"LLM not configured"`. The episodic chunk is
+always saved regardless.
+
+---
+
+### `POST /memorize/batch`
+
+Process multiple chunks in sequence. Same per-item contract as
+`/memorize`; failures don't abort the rest.
+
+**Request:**
+```json
+{
+  "items": [
+    { "holder": "agent:my-bot", "text": "chunk 1" },
+    { "holder": "agent:my-bot", "text": "chunk 2", "mode": "single" }
+  ]
+}
+```
+
+**Response:**
+```json
+{
+  "results": [
+    { "...full /memorize response..." },
+    { "...full /memorize response..." }
+  ]
+}
+```
+
+Items can override `mode` independently.
+
+---
+
+### `POST /recall`
+
+Get a Memory Evidence Bundle.
+
+**Request:**
+```json
+{
+  "holder":         "agent:my-bot",       // required
+  "action":         "read_content",        // optional, default read_content
+  "query":          "vegetarian",          // optional: free-text filter
+  "session_id":     "conversation-id",     // optional: scope
+  "subject":        "ex:user-123",         // optional: narrow by subject
+  "predicate":      "ex:residesIn",        // optional: narrow by predicate
+  "object_iri":     "ex:brooklyn",         // optional: narrow by object
+  "module_iris":    ["mem:module/episodic"], // optional: restrict modules
+  "lens_name":      "strict_identity_v1",  // optional: identity lens
+  "as_of_tx":       "2026-05-01T00:00:00Z",// optional: bitemporal time-travel
+  "polarity":       "asserted",            // optional: default asserted
+  "min_maturity":   0,                     // optional: 0..4
+  "limit":          50,                    // optional: default 50, max 500
+  "permitted_only": true                   // optional: default true
+}
+```
+
+**Response (the Memory Evidence Bundle):**
+```json
+{
+  "holder": "agent:my-bot",
+  "action": "read_content",
+  "lens":   null,
+  "as_of":  null,
+  "rows": [
+    {
+      "statement_id":     "uuid",
+      "subject":          "ex:user-123",
+      "predicate":        "ex:residesIn",
+      "object_iri":       "ex:brooklyn",
+      "object_lit":       null,
+      "context":          "ctx:memory/claims/session/conversation-id",
+      "polarity":         "asserted",
+      "maturity":         1,
+      "tx_lo":            "2026-05-28T08:30:00Z",
+      "tx_hi":            null,
+      "resolved_subject": "ex:user-123",
+      "resolved_object":  "ex:brooklyn",
+      "effective_actions": {
+        "read_metadata":  true,
+        "read_content":   true,
+        "quote":          false,
+        ...
+      },
+      "action_allowed":   true,
+      "record_iri":       "ctx:memory/claim/uuid",
+      "module_iri":       "mem:module/semantic-claim",
+      "score":            0.0327868,
+      "rank":             1
+    }
+  ],
+  "row_count":     1,
+  "modules_used":  ["mem:module/episodic", "mem:module/semantic-claim", "mem:module/preference"],
+  "policy_report": { "permitted_only": true, "default_action": "read_content" }
+}
+```
+
+#### Common recall patterns
+
+**Get all preferences for a user:**
+```json
+{ "holder": "agent:my-bot", "module_iris": ["mem:module/preference"], "limit": 100 }
+```
+
+**Find contradictory facts (mixed polarities):**
+```json
+{ "holder": "agent:my-bot", "polarity": "any", "subject": "ex:annie-davis" }
+```
+Then inspect rows for the same `(subject, predicate)` with different
+`polarity` or `object_iri`/`object_lit`.
+
+**Time-travel — what did we believe last week?**
+```json
+{ "holder": "agent:my-bot", "as_of_tx": "2026-05-21T00:00:00Z" }
+```
+
+**Semantic-similar across aliases:**
+```json
+{ "holder": "agent:my-bot", "lens_name": "likely_identity_v1",
+  "subject": "ex:annie-davis" }
+```
+Returns rows about the canonical Annie + her known aliases (Mrs
+Watson, Mary Watson, etc.) under the `likely` identity lens.
+
+---
+
+### `POST /ingest/{module}`
+
+Bypass the LLM and write directly into a specific module. Use when
+you already have structured facts.
+
+**Modules:** `episodic`, `semantic-claim`, `preference` (or full
+IRIs `mem:module/...`).
+
+**Episodic — just raw text:**
+```json
+{ "holder": "agent:my-bot", "text": "..." }
+```
+
+**Semantic-claim — typed triple:**
+```json
+{
+  "holder":    "agent:my-bot",
+  "subject":   "ex:user-123",
+  "predicate": "ex:residesIn",
+  "object_iri": "ex:brooklyn"
+}
+```
+or for a literal object:
+```json
+{
+  "holder":    "agent:my-bot",
+  "subject":   "ex:user-123",
+  "predicate": "ex:age",
+  "object_lit": { "v": 34, "dt": "xsd:integer" }
+}
+```
+
+**Preference — append-only key/value:**
+```json
+{
+  "holder": "agent:my-bot",
+  "key":    "tone",
+  "value":  "casual"
+}
+```
+A subsequent preference with the same key + a different value
+creates a *new* claim plus a `supersedes` argument edge to the old.
+Both live forever; recall returns the most recent.
+
+---
+
+### `GET /modules`
+
+List the modules this runtime has registered. Returns the runtime
+spec for each plus the DB row (so you can see if a module is
+enabled but not loaded, or vice versa).
+
+---
+
+### `POST /reconsolidate/enqueue`
+
+Manually request reconsolidation of a record. The sleep-path worker
+picks it up in the next poll cycle (default 5 s).
+
+```json
+{
+  "record_id": "uuid",
+  "reason": "explicit",
+  "priority": 0.5
+}
+```
+
+Reasons: `recall` (set automatically on every recall), `contradiction`,
+`policy_change`, `scheduled_review`, `explicit` (manual).
+
+### `GET /reconsolidate/queue`
+
+Inspect the head of the queue (up to 100 items).
+
+---
+
+### `GET /substrate`
+
+Echo the substrate's contract version + health. Useful for
+verifying donto-memory is bound to the substrate you expect.
+
+### `GET /health`, `GET /version`
+
+Liveness + version metadata.
+
+---
+
+## 5. Identity lenses
+
+The donto substrate stores *every* entity reference verbatim. When
+two references actually refer to the same real-world entity, we
+record that as a weighted identity edge — never collapse the rows.
+At query time, the **identity lens** parameter controls how strict
+the equivalence judgement is.
+
+Default seeded lenses:
+  - `strict_identity_v1` — only edges with confidence ≥ 0.98.
+  - `likely_identity_v1` — ≥ 0.85.
+  - `exploratory_identity_v1` — ≥ 0.60.
+
+If you ask for `"lens_name": "strict_identity_v1"`, a query about
+`ex:annie-davis` will return *only* rows whose subject is provably
+the same Annie (≥ 0.98 confidence). With `exploratory_identity_v1`
+you'll see a wider net — including merge candidates the substrate
+isn't sure about.
+
+For most agent workloads, `null` (no lens) is the right default —
+treat every IRI as itself, no expansion. Use `likely_identity_v1`
+when surfacing memories about a person whose name varies across
+sources.
+
+---
+
+## 6. Bitemporal time-travel
+
+Every claim has two times:
+
+  - **`valid_time`** — when the fact was true in the world.
+  - **`tx_time`** — when we believed it.
+
+Recall with `"as_of_tx": "2026-05-01T00:00:00Z"` returns the rows
+that were *currently believed* on that date. If a fact was retracted
+on 2026-05-15, an `as_of_tx=2026-05-10` query still sees it. This is
+the "what did we know on date X?" pattern.
+
+For valid-time queries (claims whose worldly validity intersects a
+target date), pass `"as_of_valid"` instead. Less common in
+agentic-memory workloads but available.
+
+---
+
+## 7. Policy actions
+
+Every recall asks for a specific action. The substrate gates each
+row based on the source's policy capsule + the holder's
+attestation. The 16 actions:
+
+  - `read_metadata` — see that the row exists. Default-permitted.
+  - `read_content` — read the actual values. The common agent recall
+    case.
+  - `quote` — include verbatim in a user-visible answer.
+  - `view_anchor_location` — see *where in the source* the claim was
+    extracted.
+  - `derive_claims` — extract new derived statements.
+  - `derive_embeddings` — generate embeddings.
+  - `translate` — translate the content.
+  - `summarize` — produce a summary.
+  - `export_claims` — include in a release.
+  - `export_sources` — include the source.
+  - `export_anchors` — include the anchor locations.
+  - `train_model` — use in model training.
+  - `publish_release` — include in a citable release.
+  - `share_with_third_party` — pass to another agent/system.
+  - `federated_query` — answer a federated query against another
+    donto instance.
+  - `request_deletion` — initiate tombstoning.
+
+Most agent workflows want `read_content` (or `quote` if you'll be
+showing the text directly to a user).
+
+When a row is denied, you still get the row in the bundle — the
+substrate is *transparent about denial*, not silent — but
+`action_allowed=false`. Use `permitted_only=true` to filter to only
+allowed rows.
+
+---
+
+## 8. Cost expectations
+
+LLM token cost dominates `/memorize` cost.
+
+  - `mode: "single"` — 1 LLM call. On `z-ai/glm-5`:
+    ~300 prompt + ~3-8 K completion = **~$0.005-$0.015** per memorize
+    on OpenRouter.
+  - `mode: "exhaustive"` — 5 parallel LLM calls. ~1.8 K prompt + ~15-25 K
+    completion total = **~$0.04-$0.07** per memorize.
+
+Recall has no LLM cost. Postgres + substrate side: a typical recall
+is <100 ms on the standard hardware.
+
+If you're processing thousands of memorize calls/day, `single` mode
+is the right default. If you're processing dozens but they're
+important (user profile facts, key conversations), use `exhaustive`.
+
+---
+
+## 9. Failure modes + retries
+
+**The episodic chunk is always saved**, even if the LLM call fails.
+You'll get a `warnings` array in the response describing what went
+wrong. If the LLM is unconfigured, you get a warning + 0 facts.
+
+  | Symptom | Fix |
+  |---|---|
+  | HTTP 400 | Validate request: `text` is required + non-empty. |
+  | HTTP 500 + warnings | LLM call failed. The chunk was saved. Retry later or call `/reconsolidate/enqueue` to re-extract. |
+  | Timeout | `/memorize?mode=exhaustive` takes 30-90 s. Use `mode=single` for low-latency paths. |
+  | Recall returns 0 rows for a query you just memorized | The substrate's `/recall` is real-time; if no rows appear, check `holder`, `session_id`, and your free-text filter. |
+  | Recall returns `action_allowed=false` everywhere | The default policy is fail-closed for most actions. Use `read_metadata` (always allowed) to see what's there, or request an attestation for the action you need. |
+
+Retries are safe: `/memorize` is idempotent at the substrate level
+(the substrate dedups by content hash), so repeated calls of the
+same chunk produce only one episodic statement. The semantic
+extraction will produce some new variant facts on each call but
+won't *contradict* — donto preserves contradictions if they happen.
+
+---
+
+## 10. Substrate concepts you should know
+
+donto-memory is built on **donto**, an evidence-grade quad store.
+Concepts that leak into the API:
+
+  - **Statement** — `(subject, predicate, object)` quad, filed under
+    a `context`. The atomic unit of belief.
+  - **Context** — an IRI grouping statements. Yours live under
+    `ctx:memory/episodic/session/<session_id>` and
+    `ctx:memory/claims/session/<session_id>`.
+  - **Polarity** — `asserted | negated | absent | unknown`. Donto
+    keeps both `X bornIn Y` and `X NOT bornIn Y` if two sources
+    disagree.
+  - **Maturity** — 0 (raw) to 4 (corroborated). Memorize-extracted
+    facts land at 1 (candidate). Reviewer-promoted facts can reach
+    higher.
+  - **tx_time / valid_time** — system time vs world time. See
+    bitemporal section.
+  - **Modality** — see modality values above.
+  - **Policy capsule** — a named bundle of allowed actions. Every
+    `donto_document` has one; defaults fail-closed.
+  - **Attestation** — credential granting a holder specific actions
+    under a policy.
+  - **Identity hypothesis** — named clustering of `same_referent`
+    edges. Strict / likely / exploratory.
+
+You don't need to manipulate these directly to use donto-memory.
+But seeing them in the recall response makes more sense once you
+know the names.
+
+---
+
+## 11. Cookbook: common agent patterns
+
+### Pattern A — Long-term user profile
+
+```python
+# Whenever the user shares a profile fact, memorize it.
+memorize(holder="agent:my-bot", session_id=f"user/{user_id}",
+         text=user_message, mode="exhaustive")
+
+# Before generating a response, recall.
+bundle = recall(holder="agent:my-bot", session_id=f"user/{user_id}",
+                action="read_content", limit=50)
+context_for_llm = format_bundle_for_prompt(bundle)
+```
+
+### Pattern B — Preference tracking
+
+```python
+# When a user says "I prefer X", use the preference module directly.
+ingest("preference", holder="agent:my-bot",
+       key="preferred_tone", value="casual")
+
+# Later, retrieve.
+prefs = recall(holder="agent:my-bot",
+               module_iris=["mem:module/preference"], limit=100)
+```
+
+A preference change is a new statement + a `supersedes` argument
+edge. Both live forever. The new value is what shows up first in
+recall.
+
+### Pattern C — Conversation memory
+
+```python
+# After each turn, save the full exchange.
+memorize(holder="agent:my-bot",
+         session_id=f"conv/{conv_id}",
+         text=f"User: {user_msg}\nMe: {my_response}",
+         modality="model_output", mode="single")
+
+# Mid-conversation recall to find earlier context.
+bundle = recall(holder="agent:my-bot",
+                session_id=f"conv/{conv_id}",
+                query=topic_keyword, limit=10)
+```
+
+### Pattern D — Multi-agent shared memory
+
+Two agents can share a holder if their access patterns are
+compatible. Both can recall what either saved. If you want
+isolation, use distinct holder IRIs (e.g. `agent:assistant`,
+`agent:summariser`).
+
+For cross-agent reads with policy gating, get an attestation: ask
+the operator to issue a `donto_attestation` to your agent IRI for
+the action you need.
+
+### Pattern E — "What did I know on date X?"
+
+```python
+bundle = recall(holder="agent:my-bot",
+                as_of_tx="2026-05-01T00:00:00Z",
+                subject="ex:annie-davis")
+```
+
+Use case: an agent wants to roll back its understanding to before a
+correction was applied, or wants to know "what would I have said
+last week?"
+
+---
+
+## 12. Things you should NOT do
+
+  - **Don't try to delete memories.** Use `/reconsolidate/enqueue`
+    with reason=`policy_change` if you want a memory's policy
+    re-evaluated. Tombstoning (true deletion) requires an
+    attestation and goes through `donto_blob_tombstone` on the
+    substrate side — out of band of donto-memory's API.
+  - **Don't include API keys or secrets in `text`.** Memories are
+    persisted; you can't unsay them. The substrate has a
+    `request_deletion` path but it's deliberately heavyweight.
+  - **Don't memorize the same chunk repeatedly to "boost" recall.**
+    Donto deduplicates at the content-hash level; you'll just
+    increment access events. Use `priority` on
+    `/reconsolidate/enqueue` if you want a specific record looked
+    at sooner.
+  - **Don't rely on `mode: "exhaustive"` for sub-second latency.**
+    Five LLM calls in parallel still take 30-90 s. Use `single` for
+    real-time paths.
+  - **Don't bypass `/memorize` to write structured facts unless you
+    really mean it.** If you call `/ingest/semantic-claim` directly
+    without an episodic anchor, the claim has no provenance — donto
+    will accept it but downstream review tools won't be able to
+    follow the chain back.
+
+---
+
+## 13. Resources
+
+  - **OpenAPI 3.1 spec:** [`/openapi.json`](/openapi.json)
+  - **Swagger UI:** [`/docs`](/docs)
+  - **This guide as plain text:** [`/llms.txt`](/llms.txt)
+  - **Repo:** [github.com/thomasdavis/donto-memory](https://github.com/thomasdavis/donto-memory)
+  - **Substrate repo:** [github.com/thomasdavis/donto](https://github.com/thomasdavis/donto)
+  - **Substrate PRD (M10 hardening):** [substrate PRD](https://genes.apexpots.com/research/donto-substrate-prd-2026-05-28.html)
+  - **Substrate paper:** [donto paper](https://genes.apexpots.com/research/donto-paper-2026-05-28.html)
+
+---
+
+*donto-memory v0.1.0 · Apache-2.0 OR MIT · Contract `0.1.0-m10`*

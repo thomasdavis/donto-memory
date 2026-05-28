@@ -41,6 +41,12 @@ pub struct Settings {
     pub llm_api_key: Option<String>,
     pub llm_model: String,
     pub llm_temperature: f32,
+
+    /// Default extraction mode for `/memorize`:
+    ///   - `single`      — one LLM call, ~20-30 facts.
+    ///   - `exhaustive`  — 5 parallel calls (apertures), ~100+ facts.
+    ///                     Slower + ~5× tokens; vastly more thorough.
+    pub extract_mode: String,
 }
 
 impl Default for Settings {
@@ -64,6 +70,7 @@ impl Default for Settings {
             llm_api_key: None,
             llm_model: "z-ai/glm-5".to_string(),
             llm_temperature: 0.2,
+            extract_mode: "exhaustive".to_string(),
         }
     }
 }
@@ -142,6 +149,9 @@ impl Settings {
             if let Ok(n) = v.parse() {
                 s.llm_temperature = n;
             }
+        }
+        if let Ok(v) = std::env::var("DONTO_MEMORY_EXTRACT_MODE") {
+            s.extract_mode = v;
         }
         s
     }

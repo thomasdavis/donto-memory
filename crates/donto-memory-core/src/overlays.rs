@@ -474,6 +474,12 @@ pub async fn register_overlays(
             "record_id",
             "Sleep-path reconsolidation queue items.",
         ),
+        (
+            "ctx:memory/overlay/job_log",
+            "donto_x_memory_job_log",
+            "job_id",
+            "Per-request audit log (memorize, recall, ingest).",
+        ),
     ];
     let mut count = 0;
     for (iri, table, owns_key, desc) in specs {
