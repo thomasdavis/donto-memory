@@ -7,10 +7,9 @@ use donto_memory_core::{
     module::register_default_modules, overlays, sleep_path, substrate::SubstrateClient,
     Settings,
 };
+use donto_memory::api;
 use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
-
-mod api;
 
 #[derive(Parser, Debug)]
 #[command(name = "donto-memory", version, about = "Agentic-memory runtime on donto")]

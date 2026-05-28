@@ -8,6 +8,10 @@ repository   = { workspace = true }
 authors      = { workspace = true }
 description  = "donto-memory binary — API server, sleep-path worker, and CLI."
 
+[lib]
+name = "donto_memory"
+path = "src/lib.rs"
+
 [[bin]]
 name = "donto-memory"
 path = "src/main.rs"
@@ -42,3 +46,4 @@ tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+http-body-util = "0.1"

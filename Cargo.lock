@@ -440,6 +440,7 @@ dependencies = [
  "donto-memory-core",
  "dotenvy",
  "futures",
+ "http-body-util",
  "reqwest",
  "serde",
  "serde_json",

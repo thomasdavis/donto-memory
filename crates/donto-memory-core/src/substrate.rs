@@ -33,9 +33,13 @@ pub struct SubstrateClient {
 impl SubstrateClient {
     /// Build a new client.
     pub fn new(base_url: impl Into<String>) -> Result<Self, SubstrateError> {
+        // 180s default — the substrate's /discovery/substrate-health
+        // can take a minute or more on prod-sized corpora (count(*)
+        // over 800k+ predicates). M12.x will fix the matview behind
+        // it; until then, generous timeout.
         let http = Client::builder()
             .user_agent(concat!("donto-memory/", env!("CARGO_PKG_VERSION")))
-            .timeout(std::time::Duration::from_secs(60))
+            .timeout(std::time::Duration::from_secs(180))
             .build()?;
         Ok(Self {
             base_url: base_url.into().trim_end_matches('/').to_string(),
@@ -209,10 +213,13 @@ impl SubstrateClient {
         strength: Option<f64>,
         evidence: Option<&serde_json::Value>,
     ) -> Result<serde_json::Value, SubstrateError> {
+        // dontosrv's POST /arguments/assert takes `source` + `target` UUID
+        // fields (not the SQL column names). Keep our parameter names
+        // descriptive but rename on the wire.
         #[derive(Serialize)]
         struct Req<'a> {
-            source_statement_id: &'a uuid::Uuid,
-            target_statement_id: &'a uuid::Uuid,
+            source: &'a uuid::Uuid,
+            target: &'a uuid::Uuid,
             relation: &'a str,
             context: &'a str,
             #[serde(skip_serializing_if = "Option::is_none")]
@@ -221,8 +228,8 @@ impl SubstrateClient {
             evidence: Option<&'a serde_json::Value>,
         }
         let req = Req {
-            source_statement_id: &source_statement_id,
-            target_statement_id: &target_statement_id,
+            source: &source_statement_id,
+            target: &target_statement_id,
             relation,
             context,
             strength,
