@@ -211,9 +211,57 @@ Save a memory. Episodic + (optional) LLM extraction.
   "session_id":  "conversation-id",       // optional: scope
   "modality":    "model_output",          // optional: see below
   "extract":     true,                    // optional: false = no LLM
-  "mode":        "exhaustive"             // optional: single | exhaustive
+  "mode":        "exhaustive",            // optional: single | exhaustive
+  "images":      [                        // optional: see §4.0 below
+    "https://example.com/photo.jpg",
+    "data:image/png;base64,iVBORw0K…"
+  ]
 }
 ```
+
+#### Multimodal memories (images)
+
+When `images` is non-empty, donto-memory switches the LLM call to
+OpenAI multimodal message format and (if `DONTO_MEMORY_LLM_VISION_MODEL`
+is set on the runtime) uses the configured vision model — currently
+`openai/gpt-4o-mini` in production. Each entry is one of:
+
+  - An **http(s) URL** the LLM provider can fetch directly. Hotlink
+    protection on the host (e.g. Wikimedia returns 400 to LLM
+    providers) is the most common cause of failure — host images on
+    a CDN you control, or pre-fetch them yourself and inline as a
+    data URL.
+  - A **`data:image/...;base64,…` data URL** with the bytes inline.
+    Use this for screenshots, uploads, or anything not on a public
+    HTTP host. Note that very small or malformed PNGs may be
+    rejected with `image_parse_error` by the provider; sanity-check
+    by viewing the data URL in a browser first.
+
+A typical landscape photo at 512×512 yields ~25 facts in ~13 s on
+`openai/gpt-4o-mini`. The extracted statements look the same as
+text-extracted ones — typed triples about objects in the scene,
+their relations, their properties:
+
+```json
+{ "subject": "ctx:landscape/1", "predicate": "ex:hasElement",
+  "object_iri": "ctx:road/1", "confidence": 0.9 }
+{ "subject": "ctx:road/1", "predicate": "ex:hasType",
+  "object_lit": {"v": "winding road", "dt": "string"} }
+```
+
+A few practical notes:
+
+  - You can mix text + images in the same call: the `text` field
+    becomes the focal narration; the model sees the images alongside
+    it and extracts facts about both.
+  - **`mode: "exhaustive"` with images is expensive** (5 parallel
+    vision calls). For most multimodal use cases `mode: "single"`
+    is right.
+  - The episodic chunk stored under
+    `ctx:memory/episodic/session/<id>` is the **text** you sent —
+    not the image bytes. If you want the image content-addressed +
+    tombstoneable, register it as a `donto_blob` first (see §13)
+    and reference its IRI from `source_record_iri`.
 
 **Response:**
 ```json

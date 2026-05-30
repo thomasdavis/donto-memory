@@ -40,6 +40,11 @@ pub struct Settings {
     pub llm_base_url: Option<String>,
     pub llm_api_key: Option<String>,
     pub llm_model: String,
+    /// Optional vision-capable model. Used by /memorize when
+    /// images are attached. Defaults to None, in which case
+    /// `llm_model` is used for multimodal calls too (works if it
+    /// is already vision-capable).
+    pub llm_vision_model: Option<String>,
     pub llm_temperature: f32,
 
     /// Default extraction mode for `/memorize`:
@@ -74,6 +79,7 @@ impl Default for Settings {
             llm_base_url: None,
             llm_api_key: None,
             llm_model: "z-ai/glm-5".to_string(),
+            llm_vision_model: None,
             llm_temperature: 0.2,
             extract_mode: "exhaustive".to_string(),
             job_log_retention_days: 30,
@@ -150,6 +156,9 @@ impl Settings {
         }
         if let Ok(v) = std::env::var("DONTO_MEMORY_LLM_MODEL") {
             s.llm_model = v;
+        }
+        if let Ok(v) = std::env::var("DONTO_MEMORY_LLM_VISION_MODEL") {
+            s.llm_vision_model = Some(v);
         }
         if let Ok(v) = std::env::var("DONTO_MEMORY_LLM_TEMPERATURE") {
             if let Ok(n) = v.parse() {

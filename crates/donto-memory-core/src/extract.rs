@@ -230,6 +230,11 @@ pub struct MemoryExtractor {
     base_url: String,
     api_key: String,
     model: String,
+    /// Optional separate model used when images are present in the
+    /// /memorize call. When `None`, the regular `model` is used for
+    /// both text-only and multimodal calls (works fine if `model` is
+    /// already vision-capable).
+    vision_model: Option<String>,
     temperature: f32,
     http: Client,
 }
@@ -247,6 +252,7 @@ impl MemoryExtractor {
             base_url: base_url.trim_end_matches('/').to_string(),
             api_key,
             model: settings.llm_model.clone(),
+            vision_model: settings.llm_vision_model.clone(),
             temperature: settings.llm_temperature,
             http,
         })
@@ -254,12 +260,18 @@ impl MemoryExtractor {
 
     /// Single-pass extraction. ~20–30 facts per chunk, ~one LLM call,
     /// ~$0.005–$0.02 per chunk depending on model.
+    ///
+    /// `images` is a list of http(s) URLs or `data:image/...;base64,…`
+    /// URLs. When non-empty, the call switches to OpenAI multimodal
+    /// message format and (if configured) uses `vision_model`
+    /// instead of `model`.
     pub async fn extract_single(
         &self,
         text: &str,
         holder: &str,
         session_id: Option<&str>,
         source_record_iri: Option<&str>,
+        images: &[String],
     ) -> Result<ExtractionResult, ExtractError> {
         let started = std::time::Instant::now();
         let yield_ = self
@@ -270,6 +282,7 @@ impl MemoryExtractor {
                 holder,
                 session_id,
                 source_record_iri,
+                images,
             )
             .await?;
         Ok(ExtractionResult {
@@ -297,6 +310,7 @@ impl MemoryExtractor {
         holder: &str,
         session_id: Option<&str>,
         source_record_iri: Option<&str>,
+        images: &[String],
     ) -> Result<ExtractionResult, ExtractError> {
         let started = std::time::Instant::now();
         let futures = Aperture::ALL.iter().map(|a| {
@@ -306,6 +320,7 @@ impl MemoryExtractor {
             let holder = holder.to_string();
             let session_id = session_id.map(|s| s.to_string());
             let source = source_record_iri.map(|s| s.to_string());
+            let images = images.to_vec();
             async move {
                 let id = aperture.id();
                 let result = me
@@ -316,6 +331,7 @@ impl MemoryExtractor {
                         &holder,
                         session_id.as_deref(),
                         source.as_deref(),
+                        &images,
                     )
                     .await;
                 (aperture, result)
@@ -388,20 +404,52 @@ impl MemoryExtractor {
         holder: &str,
         session_id: Option<&str>,
         source_record_iri: Option<&str>,
+        images: &[String],
     ) -> Result<OneCallResult, ExtractError> {
         let started = std::time::Instant::now();
         let user_prompt = build_user_prompt(text, holder, session_id, source_record_iri);
+
+        // When images are attached, switch to the OpenAI multimodal
+        // message format: `content` becomes an array of parts. Each
+        // image_url accepts an http(s) URL or a data: URL with a
+        // base64 payload (`data:image/png;base64,...`). When no
+        // images are present we keep the simpler string-content
+        // shape — non-vision models still accept this.
+        let user_message_content = if images.is_empty() {
+            serde_json::json!(user_prompt)
+        } else {
+            let mut parts: Vec<serde_json::Value> = Vec::with_capacity(1 + images.len());
+            parts.push(serde_json::json!({"type": "text", "text": user_prompt}));
+            for url in images {
+                parts.push(serde_json::json!({
+                    "type": "image_url",
+                    "image_url": { "url": url },
+                }));
+            }
+            serde_json::json!(parts)
+        };
+
+        // If the runtime has a separate vision model configured and
+        // images are present, prefer it. Otherwise stay on the text
+        // model (multimodal-capable models accept text-only requests
+        // fine).
+        let chosen_model = if !images.is_empty() && self.vision_model.is_some() {
+            self.vision_model.as_deref().unwrap()
+        } else {
+            self.model.as_str()
+        };
+
         // Reasoning models (z-ai/glm-5 etc.) sometimes return null
         // `content` when the reasoning budget is too tight to leave
         // room for the JSON output. We give them a generous overall
         // budget and don't cap the reasoning channel separately.
         let req = serde_json::json!({
-            "model": self.model,
+            "model": chosen_model,
             "temperature": self.temperature,
             "max_tokens": 8000,
             "messages": [
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
+                {"role": "user", "content": user_message_content},
             ],
             "response_format": { "type": "json_object" },
         });

@@ -44,6 +44,13 @@ pub struct MemorizeReq {
     /// to `exhaustive`).
     #[serde(default)]
     pub mode: Option<String>,
+    /// Optional images to attach. Each entry is either an http(s)
+    /// URL the LLM provider can fetch, or a `data:image/png;base64,…`
+    /// data URL with the bytes inline. When non-empty, the extractor
+    /// switches to OpenAI multimodal message format and (if set)
+    /// uses `DONTO_MEMORY_LLM_VISION_MODEL` instead of the default.
+    #[serde(default)]
+    pub images: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -254,6 +261,7 @@ async fn memorize_one(
                                 &req.holder,
                                 req.session_id.as_deref(),
                                 Some(&episodic_record.record_iri),
+                                &req.images,
                             )
                             .await
                     }
@@ -264,6 +272,7 @@ async fn memorize_one(
                                 &req.holder,
                                 req.session_id.as_deref(),
                                 Some(&episodic_record.record_iri),
+                                &req.images,
                             )
                             .await
                     }
