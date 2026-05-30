@@ -28,10 +28,18 @@ pub enum OverlayError {
 
 /// Build a deadpool_postgres pool from a DSN string.
 ///
-/// Pool size is bumped to 32 from the deadpool default of 10. Every
-/// /recall in donto-memory grabs ~3 connections briefly (substrate
-/// proxy call, access event write, audit log write); the default
-/// silently times out the 6th concurrent recall.
+/// Tweaks vs deadpool defaults:
+///   - `pool_size = 32` (default 10). Every /recall briefly holds
+///     ~3 connections (substrate proxy, access event write, audit
+///     log write); the default silently timed out the 6th
+///     concurrent recall.
+///   - `statement_timeout = 10s` (server-side). A slow substrate
+///     query (e.g. a context filter that the planner mis-plans
+///     against the 39M-row donto_statement table) can otherwise
+///     hold a pool connection for minutes and starve every other
+///     handler.
+///   - `application_name = donto-memory` so pg_stat_activity shows
+///     where load is coming from.
 pub fn pool_from_dsn(dsn: &str) -> Result<Pool, OverlayError> {
     let pg_cfg = tokio_postgres::Config::from_str(dsn)
         .map_err(|e| OverlayError::Config(e.to_string()))?;
@@ -47,6 +55,12 @@ pub fn pool_from_dsn(dsn: &str) -> Result<Pool, OverlayError> {
         .get_password()
         .map(|p| String::from_utf8_lossy(p).into_owned());
     cfg.dbname = pg_cfg.get_dbname().map(str::to_owned);
+    cfg.application_name = Some("donto-memory".into());
+    // Server-side cap. SET statement_timeout takes effect on the
+    // next statement; this propagates to every checkout via the
+    // `options` connect parameter so the cap is in force from the
+    // very first query a connection runs.
+    cfg.options = Some("-c statement_timeout=10000".into());
     cfg.manager = Some(ManagerConfig {
         recycling_method: RecyclingMethod::Fast,
     });

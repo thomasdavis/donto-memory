@@ -253,7 +253,7 @@ pub async fn facts(
                         lower(s.tx_time) as tx_lo
                    from donto_statement s
                   where s.statement_id = $1
-                    and upper(s.tx_time) is null
+                    and s.tx_time @> now()
                   limit $2",
                 &[&uuid, &limit],
             )
@@ -282,9 +282,9 @@ pub async fn facts(
                             from donto_statement
                            where predicate = 'mem:claim/derived_from'
                              and object_iri = $1
-                             and upper(tx_time) is null
+                             and tx_time @> now()
                         )
-                    and upper(s.tx_time) is null
+                    and s.tx_time @> now()
                   limit $2",
                 &[iri, &limit],
             )
@@ -308,8 +308,8 @@ pub async fn facts(
                     lower(s.tx_time) as tx_lo
                from donto_statement s
               where s.context = any($1::text[])
-                and upper(s.tx_time) is null
-              order by s.tx_time desc
+                and s.tx_time @> now()
+              order by lower(s.tx_time) desc
               limit $2",
             &[&vec![claims_ctx, episodic_ctx], &limit],
         )
