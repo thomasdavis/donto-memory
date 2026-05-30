@@ -57,6 +57,13 @@ pub struct Settings {
     /// keep before the worker prunes them. Default 30. Set to 0 to
     /// disable pruning entirely.
     pub job_log_retention_days: i64,
+
+    /// When true, /memorize calls with images run an OCR pass first
+    /// (one extra vision-LLM round-trip) and prepend the
+    /// transcribed text to the memory's `text` field. Lets visible
+    /// labels, screenshots, signs, etc. become searchable via
+    /// /recall query=. Default true.
+    pub ocr_enabled: bool,
 }
 
 impl Default for Settings {
@@ -83,6 +90,7 @@ impl Default for Settings {
             llm_temperature: 0.2,
             extract_mode: "exhaustive".to_string(),
             job_log_retention_days: 30,
+            ocr_enabled: true,
         }
     }
 }
@@ -172,6 +180,9 @@ impl Settings {
             if let Ok(n) = v.parse() {
                 s.job_log_retention_days = n;
             }
+        }
+        if let Ok(v) = std::env::var("DONTO_MEMORY_OCR_ENABLED") {
+            s.ocr_enabled = !matches!(v.as_str(), "false" | "0" | "no");
         }
         s
     }

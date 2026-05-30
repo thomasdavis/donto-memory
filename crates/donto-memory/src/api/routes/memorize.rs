@@ -224,12 +224,49 @@ async fn memorize_one(
     s: &Arc<AppState>,
     req: &MemorizeReq,
 ) -> Result<MemorizeResp, MemorizeError> {
-    if req.text.trim().is_empty() {
+    // Allow empty text when images are attached — the OCR pass will
+    // fill it in. Empty text + no images is still an error.
+    if req.text.trim().is_empty() && req.images.is_empty() {
         return Err(MemorizeError::BadInput(
-            "text is required and must be non-empty".into(),
+            "text is required and must be non-empty (or attach images)".into(),
         ));
     }
     let started = std::time::Instant::now();
+
+    // OCR pass: if images are attached and OCR is enabled, transcribe
+    // visible text and prepend it to the memory's text field. The
+    // augmented text becomes the episodic chunk AND seeds the
+    // structured extraction. Best-effort: an OCR error is logged as a
+    // warning and we proceed with no augmentation.
+    let mut effective_text = req.text.clone();
+    let mut ocr_warnings: Vec<String> = Vec::new();
+    if !req.images.is_empty() && s.settings.ocr_enabled {
+        if let Some(extractor) = MemoryExtractor::from_settings(&s.settings) {
+            match extractor.ocr_images(&req.images).await {
+                Ok(transcripts) => {
+                    let mut blocks: Vec<String> = Vec::new();
+                    for (i, t) in transcripts.iter().enumerate() {
+                        let t = t.trim();
+                        if !t.is_empty() {
+                            blocks.push(format!("[OCR text from image #{}]\n{t}", i + 1));
+                        }
+                    }
+                    if !blocks.is_empty() {
+                        let ocr_block = blocks.join("\n\n");
+                        effective_text = if effective_text.trim().is_empty() {
+                            ocr_block
+                        } else {
+                            format!("{effective_text}\n\n{ocr_block}")
+                        };
+                    }
+                }
+                Err(e) => {
+                    warn!(error = %e, "OCR pass failed; continuing without OCR");
+                    ocr_warnings.push(format!("ocr failed: {e}"));
+                }
+            }
+        }
+    }
     let registry = register_default_modules();
     let episodic: MemoryModuleArc = registry
         .get("mem:module/episodic")
@@ -242,7 +279,7 @@ async fn memorize_one(
     let episodic_input = IngestInput {
         holder: req.holder.clone(),
         session_id: req.session_id.clone(),
-        text: req.text.clone(),
+        text: effective_text.clone(),
         modality: req.modality.clone(),
         subject: None,
         predicate: None,
@@ -256,7 +293,7 @@ async fn memorize_one(
         .ingest(&s.substrate, &s.pool, &s.settings.consumer_iri, &episodic_input)
         .await?;
 
-    let mut warnings: Vec<String> = Vec::new();
+    let mut warnings: Vec<String> = ocr_warnings;
     let mut facts_extracted = 0usize;
     let mut facts_ingested = 0usize;
     let mut dedup_collisions = 0u32;
@@ -286,7 +323,7 @@ async fn memorize_one(
                     "single" => {
                         extractor
                             .extract_single(
-                                &req.text,
+                                &effective_text,
                                 &req.holder,
                                 req.session_id.as_deref(),
                                 Some(&episodic_record.record_iri),
@@ -297,7 +334,7 @@ async fn memorize_one(
                     "exhaustive" | "multi" | "apertures" => {
                         extractor
                             .extract_exhaustive(
-                                &req.text,
+                                &effective_text,
                                 &req.holder,
                                 req.session_id.as_deref(),
                                 Some(&episodic_record.record_iri),

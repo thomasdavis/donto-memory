@@ -237,6 +237,31 @@ is set on the runtime) uses the configured vision model — currently
     rejected with `image_parse_error` by the provider; sanity-check
     by viewing the data URL in a browser first.
 
+**OCR is automatic.** Before the main extraction runs, donto-memory
+makes one extra vision-LLM call asking the model to transcribe every
+word visible in the image(s). The transcribed text is appended to
+your memory's `text` field as:
+
+```
+<your original text>
+
+[OCR text from image #1]
+<transcribed text from the first image>
+
+[OCR text from image #2]
+<transcribed text from the second image>
+```
+
+The augmented chunk becomes the episodic record and seeds the
+structured-fact extraction, so visible labels, screenshots, signs,
+code, watermarks, captions, etc. all become searchable via
+`POST /recall query=<keyword>` later. If an image has no text, no
+block is appended for that index.
+
+Disable via `DONTO_MEMORY_OCR_ENABLED=false` on the runtime if you
+want raw image-content extraction only. An OCR failure is logged
+as a warning and the regular extraction still runs.
+
 A typical landscape photo at 512×512 yields ~25 facts in ~13 s on
 `openai/gpt-4o-mini`. The extracted statements look the same as
 text-extracted ones — typed triples about objects in the scene,

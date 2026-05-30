@@ -258,6 +258,99 @@ impl MemoryExtractor {
         })
     }
 
+    /// OCR every image and return one transcript per image (empty
+    /// string when no text is visible).
+    ///
+    /// Implemented as a single multimodal LLM call against the
+    /// configured `vision_model` with a tight OCR-only prompt. The
+    /// model is asked to return JSON of shape
+    /// `{"transcripts": ["...", "...", ...]}` — one string per
+    /// image, in order. This is one network round-trip regardless of
+    /// the number of images.
+    ///
+    /// Callers should treat an OCR error as best-effort: if the call
+    /// fails, fall back to no-OCR rather than aborting the whole
+    /// memorize flow.
+    pub async fn ocr_images(&self, images: &[String]) -> Result<Vec<String>, ExtractError> {
+        if images.is_empty() {
+            return Ok(Vec::new());
+        }
+        let chosen_model = self
+            .vision_model
+            .as_deref()
+            .unwrap_or(self.model.as_str());
+
+        let mut parts: Vec<serde_json::Value> = Vec::with_capacity(1 + images.len());
+        parts.push(serde_json::json!({
+            "type": "text",
+            "text": OCR_PROMPT,
+        }));
+        for url in images {
+            parts.push(serde_json::json!({
+                "type": "image_url",
+                "image_url": { "url": url },
+            }));
+        }
+
+        let req = serde_json::json!({
+            "model": chosen_model,
+            "temperature": 0.0,  // deterministic transcription
+            "max_tokens": 4000,
+            "messages": [
+                {"role": "system", "content": OCR_SYSTEM_PROMPT},
+                {"role": "user", "content": parts},
+            ],
+            "response_format": { "type": "json_object" },
+        });
+        let resp = self
+            .http
+            .post(format!("{}/chat/completions", self.base_url))
+            .bearer_auth(&self.api_key)
+            .json(&req)
+            .send()
+            .await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(ExtractError::Status {
+                status: status.as_u16(),
+                body: body.chars().take(512).collect(),
+            });
+        }
+        let chat: ChatCompletion = resp
+            .json()
+            .await
+            .map_err(|e| ExtractError::Decode(e.to_string()))?;
+        let msg = chat
+            .choices
+            .first()
+            .map(|c| &c.message)
+            .ok_or_else(|| ExtractError::Decode("no message in OCR response".into()))?;
+        let content = msg
+            .content
+            .as_ref()
+            .filter(|s| !s.trim().is_empty())
+            .or(msg.reasoning_content.as_ref().filter(|s| !s.trim().is_empty()))
+            .cloned()
+            .ok_or_else(|| ExtractError::Decode("no OCR content".into()))?;
+
+        #[derive(Deserialize)]
+        struct OcrEnvelope {
+            #[serde(default)]
+            transcripts: Vec<String>,
+        }
+        let stripped = strip_markdown_code_fence(&content);
+        let parsed: OcrEnvelope = serde_json::from_str(&stripped)
+            .map_err(|e| ExtractError::Decode(format!("OCR not valid JSON: {e}")))?;
+        // Pad to one entry per image even if model returned fewer.
+        let mut out = parsed.transcripts;
+        while out.len() < images.len() {
+            out.push(String::new());
+        }
+        out.truncate(images.len());
+        Ok(out)
+    }
+
     /// Single-pass extraction. ~20–30 facts per chunk, ~one LLM call,
     /// ~$0.005–$0.02 per chunk depending on model.
     ///
@@ -615,6 +708,20 @@ Mark every fact hypothesis_only=true. Confidence ~0.85 (it is \
 conceivable). Modality inferred. Be wildly thorough — this aperture \
 floods the candidate space. 30+ facts from a single named entity is \
 fine.\n\n";
+
+const OCR_SYSTEM_PROMPT: &str = "You are an OCR engine. You will be \
+shown one or more images. For each image, transcribe EVERY word \
+visible — UI labels, screenshots, signs, handwritten notes, captions, \
+watermarks, numbers, code. Preserve line breaks where they matter. \
+If an image has no visible text, return an empty string for that \
+index. Do NOT describe the image. Do NOT add commentary. Return \
+STRICT JSON of shape {\"transcripts\": [\"text from image 1\", \
+\"text from image 2\", ...]} with exactly one entry per input image, \
+in the same order they were provided.";
+
+const OCR_PROMPT: &str =
+    "Transcribe every word visible in each of the following image(s). \
+Return STRICT JSON {\"transcripts\":[...]}, one entry per image.";
 
 fn build_user_prompt(
     text: &str,
