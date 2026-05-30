@@ -50,7 +50,11 @@ pub struct ExtractedFact {
     pub predicate: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub object_iri: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_lenient_object_lit",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub object_lit: Option<serde_json::Value>,
     #[serde(
         default,
@@ -90,6 +94,36 @@ where
         },
         serde_json::Value::Number(n) => Some(n.as_f64().map(|x| x != 0.0).unwrap_or(false)),
         _ => None,
+    })
+}
+
+/// Accept the substrate's `{v, dt}` Literal struct, but also coerce
+/// LLM shape-variance — bare strings, numbers, and bools — into a
+/// proper Literal with a sensible default datatype. Caught one real
+/// failure mode in prod: GLM-5 occasionally returned `object_lit:
+/// "alarm history"` instead of `object_lit: {v: "alarm history",
+/// dt: "xsd:string"}`, and substrate's 422 rejected the whole fact.
+/// Now we wrap it so the fact lands instead of vanishing.
+fn deserialize_lenient_object_lit<'de, D>(d: D) -> Result<Option<serde_json::Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde_json::{json, Value};
+    let v = Value::deserialize(d)?;
+    Ok(match v {
+        Value::Null => None,
+        // Already-shaped {v, dt} struct: pass through unchanged.
+        Value::Object(_) => Some(v),
+        // Bare string → assume xsd:string.
+        Value::String(s) => Some(json!({"v": s, "dt": "xsd:string"})),
+        // Integer / float → xsd:integer or xsd:decimal.
+        Value::Number(n) => {
+            let dt = if n.is_i64() || n.is_u64() { "xsd:integer" } else { "xsd:decimal" };
+            Some(json!({"v": n, "dt": dt}))
+        }
+        Value::Bool(b) => Some(json!({"v": b, "dt": "xsd:boolean"})),
+        // Arrays don't make sense as a single Literal — drop with None.
+        Value::Array(_) => None,
     })
 }
 
@@ -1219,6 +1253,44 @@ mod tests {
         }"#;
         let f: ExtractedFact = serde_json::from_str(raw).unwrap();
         assert_eq!(f.hypothesis_only, Some(true));
+    }
+
+    /// Real prod incident 2026-05-30: GLM-5 returned `object_lit:
+    /// "alarm history"` (bare string) instead of the documented
+    /// `{v, dt}` shape. Substrate rejected with 422 and lost the
+    /// fact. The lenient deserializer must wrap bare strings as
+    /// xsd:string so the fact lands.
+    #[test]
+    fn extracted_fact_lenient_object_lit_bare_string() {
+        let raw = r#"{
+            "subject":"ex:s","predicate":"ex:p",
+            "object_lit":"alarm history"
+        }"#;
+        let f: ExtractedFact = serde_json::from_str(raw).unwrap();
+        let lit = f.object_lit.expect("object_lit should have been wrapped, not dropped");
+        assert_eq!(lit["v"], "alarm history");
+        assert_eq!(lit["dt"], "xsd:string");
+    }
+
+    #[test]
+    fn extracted_fact_lenient_object_lit_bare_number() {
+        let raw = r#"{"subject":"ex:s","predicate":"ex:p","object_lit":42}"#;
+        let f: ExtractedFact = serde_json::from_str(raw).unwrap();
+        let lit = f.object_lit.expect("number must be wrapped");
+        assert_eq!(lit["v"], 42);
+        assert_eq!(lit["dt"], "xsd:integer");
+    }
+
+    #[test]
+    fn extracted_fact_lenient_object_lit_struct_passthrough() {
+        let raw = r#"{
+            "subject":"ex:s","predicate":"ex:p",
+            "object_lit":{"v":"hello","dt":"xsd:string"}
+        }"#;
+        let f: ExtractedFact = serde_json::from_str(raw).unwrap();
+        let lit = f.object_lit.unwrap();
+        assert_eq!(lit["v"], "hello");
+        assert_eq!(lit["dt"], "xsd:string");
     }
 
     /// Salvage facts from a truncated LLM JSON response. This is the
