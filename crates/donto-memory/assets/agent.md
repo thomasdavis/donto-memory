@@ -691,7 +691,8 @@ wrong. If the LLM is unconfigured, you get a warning + 0 facts.
   |---|---|
   | HTTP 400 | Validate request: `text` is required + non-empty. |
   | HTTP 500 + warnings | LLM call failed. The chunk was saved. Retry later or call `/reconsolidate/enqueue` to re-extract. |
-  | Timeout | `/memorize?mode=exhaustive` takes 60-180 s on z-ai/glm-5. Cloudflare's free-tier proxy times out at 100 s — call the host on its private IP for long jobs, or use `mode=single`. |
+  | HTTP 202 with `status: "queued"` | Not a failure — slow modes (`deep`, `exhaustive`) auto-defer. See §9.1. |
+  | Timeout | `/memorize?mode=exhaustive` takes 60-180 s on z-ai/glm-5. Cloudflare's free-tier proxy times out at 100 s — but slow modes are now async by default so this should not occur. Pass `"async": false` explicitly if you want the sync path. |
   | Recall returns 0 rows for a query you just memorized | The substrate's `/recall` is real-time; if no rows appear, check `holder`, `session_id`, and your free-text filter. |
   | Recall returns `action_allowed=false` everywhere | The default policy is fail-closed for most actions. Use `read_metadata` (always allowed) to see what's there, or request an attestation for the action you need. |
 
@@ -700,6 +701,49 @@ Retries are safe: `/memorize` is idempotent at the substrate level
 same chunk produce only one episodic statement. The semantic
 extraction will produce some new variant facts on each call but
 won't *contradict* — donto preserves contradictions if they happen.
+
+### 9.1 Async memorize (`HTTP 202`)
+
+`mode: "single"` runs synchronously and returns the full
+`MemorizeResp` in the response body. Slow modes —
+`mode: "exhaustive"` (5 parallel apertures) and
+`mode: "deep"` (N sequential passes) — would routinely exceed
+Cloudflare's 100s proxy timeout, so they **default to async**.
+You'll get back HTTP 202 with this body:
+
+```json
+{
+  "status":       "queued",
+  "queue_id":     "<uuid>",
+  "holder":       "agent:my-bot",
+  "session_id":   "<session>",
+  "extract_mode": "deep",
+  "passes":       3,
+  "note":         "extraction running in the background. Poll /recall or /jobs for results."
+}
+```
+
+The episodic chunk is already saved at this point — you can recall
+the raw text immediately. The structured facts arrive when the
+background task finishes (typically 1-5 minutes depending on input
+length, model, and pass count). Poll either `/recall` or look up
+the job at `/jobs/list.json?holder=<your-holder>` to see when the
+audit log writes the matching `(async)` completion row.
+
+**Override.** Pass `"async": false` to force the sync path on slow
+modes (useful when you want to wait inline, e.g. behind a private
+network without HTTP timeout limits). Pass `"async": true` on
+`single` mode to make it fire-and-forget.
+
+**The four endpoint-label states** in `/jobs/list.json`:
+  - `POST /memorize` — sync mode complete (single, or explicit `async:false`).
+  - `POST /memorize (queued)` — async accepted; HTTP 202; background task still running.
+  - `POST /memorize (async)` — async complete; the deferred extraction finished and the facts are now in the substrate.
+  - `POST /memorize (lost)` — the API server restarted before the background task could finish. Surfaced automatically on next startup; status 500 in the audit log. The original request body is preserved in the row so an operator can re-memorize if desired.
+
+If you see a `(lost)` row for a memorize you care about, the
+episodic chunk is still in the substrate (it was written before
+the LLM call) — only the structured-fact extraction was lost.
 
 ---
 
