@@ -768,6 +768,33 @@ If you see a `(lost)` row for a memorize you care about, the
 episodic chunk is still in the substrate (it was written before
 the LLM call) — only the structured-fact extraction was lost.
 
+#### Restart-cost hazard on `deep` mode
+
+**`systemctl restart donto-memory-api` kills every in-flight
+async task immediately**. The orphan-recovery scan on the next
+startup writes a `(lost)` row for each one, but the LLM tokens
+already spent on partial extraction are gone. At
+`passes: 7`, that's ~$0.10–0.20 of OpenRouter spend per killed task;
+at the routine queue depth of ~20 in-flight tasks during busy
+periods, a single careless restart can cost $2–4.
+
+Two operational practices to avoid this:
+
+1. **Drain before maintenance.** Watch the audit log; wait for
+   `(queued)` rows to clear (or for the queue depth to drop to
+   acceptable levels) before restarting.
+2. **Prefer hot-config changes.** Anything you can change without
+   a restart (e.g. dropping an env-var-derived flag that only
+   affects future calls, or rolling a flag through a config-watch
+   service) avoids the restart entirely. Code changes that require
+   a new binary do require a restart.
+
+The orphan-recovery's startup log line —
+`marked stale (lost) queued memorize rows from prior runs orphaned=N` —
+will tell you exactly how many tasks died on each restart. If you
+see N consistently > 5, the deploy-during-traffic pattern is
+costing you real money.
+
 ---
 
 ## 10. Substrate concepts you should know
