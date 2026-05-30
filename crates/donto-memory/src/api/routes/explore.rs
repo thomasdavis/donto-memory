@@ -370,18 +370,18 @@ pub async fn facts(
                from donto_statement s
               where s.context = any($1::text[])
                 and s.tx_time @> now()
-                -- Row is owned by the holder if:
-                --   (a) its subject is in the holder's episodic
-                --       record_iris (an episodic chunk we own), OR
-                --   (b) its statement_id is in the holder's
-                --       semantic-claim root_statement set, OR
-                --   (c) its subject (as uuid) is in the holder's
-                --       semantic-claim root_statements (the
-                --       mem:claim/derived_from edges we own).
+                -- Row is owned by the holder if either:
+                --   (a) its subject matches an episodic record_iri
+                --       we own (chunks + their meta-edges share
+                --       the chunk context IRI as subject), OR
+                --   (b) its statement_id matches a semantic-claim
+                --       root_statement we own.
+                -- Derived-from edges (the mem:claim/derived_from
+                -- plumbing) are substrate internals; we don't
+                -- surface them in /explore.
                 and (
                   s.subject = any($3::text[])
                   or s.statement_id = any($4::uuid[])
-                  or (s.subject ~ '^[0-9a-f]{8}-' and s.subject::uuid = any($4::uuid[]))
                 )
               order by lower(s.tx_time) desc
               limit $2",
@@ -399,7 +399,16 @@ pub async fn facts(
 
     let rows = match rows_result {
         Ok(r) => r,
-        Err(e) => return err(500, format!("db: {e}")),
+        Err(e) => {
+            // Unwrap the SQLSTATE + message if it's a server-side
+            // error; tokio_postgres::Error's Display strips this.
+            let msg = if let Some(db) = e.as_db_error() {
+                format!("db: {} {}: {}", db.severity(), db.code().code(), db.message())
+            } else {
+                format!("db: {e}")
+            };
+            return err(500, msg);
+        }
     };
     let facts: Vec<Value> = rows
         .into_iter()
