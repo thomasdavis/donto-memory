@@ -335,7 +335,7 @@ async function loadRecords() {
       target.innerHTML = '<div class="empty">no session id; facts can only be listed per-record above</div>';
       return;
     }
-    const f = await fetch(`/explore/facts.json?session=${encodeURIComponent(sessionForFacts)}&limit=500`).then(r=>r.json());
+    const f = await fetch(`/explore/facts.json?session=${encodeURIComponent(sessionForFacts)}&holder=${encodeURIComponent(state.holder)}&limit=500`).then(r=>r.json());
     target.innerHTML = `<div class="meta" style="margin-bottom:0.3rem">${f.count} fact(s) under <code>${esc(sessionForFacts)}</code></div>` + renderFacts(f);
   });
 }

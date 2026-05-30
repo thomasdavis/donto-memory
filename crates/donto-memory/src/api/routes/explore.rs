@@ -63,6 +63,11 @@ pub struct FactsQuery {
     pub record_iri: Option<String>,
     #[serde(default)]
     pub session: Option<String>,
+    /// Required when `session` is set — without it the endpoint
+    /// would leak facts across holders sharing the session context
+    /// (a Discord channel where multiple users wrote, for example).
+    #[serde(default)]
+    pub holder: Option<String>,
     #[serde(default = "default_limit")]
     pub limit: i64,
 }
@@ -297,7 +302,63 @@ pub async fn facts(
             );
         }
     } else if let Some(sess) = q.session.as_ref() {
-        // Path 3: walk both session-scoped contexts.
+        // Path 3: walk both session-scoped contexts, isolated to
+        // a single holder. A session context can contain content
+        // from multiple holders (Discord channel with multiple
+        // users) so we MUST filter by the requesting holder's
+        // owned records — otherwise we leak across holders.
+        let Some(holder) = q.holder.as_ref() else {
+            return err(
+                400,
+                "holder is required when session is set — \
+                 session contexts can be shared across holders and \
+                 the unfiltered set would leak across users"
+                    .to_string(),
+            );
+        };
+
+        // Resolve to the set of statement_ids the holder owns,
+        // across both modules that file under session contexts
+        // (semantic-claim → root_statement, episodic → none, but
+        // chunks live under ctx:memory/episodic/<chunk_uuid> which
+        // ARE the record_iris of episodic records owned by holder).
+        let owned_stmts: Vec<uuid::Uuid> = {
+            let rows = match conn
+                .query(
+                    "select root_statement::uuid
+                       from donto_x_memory_record
+                      where holder_iri = $1 and session_iri = $2
+                        and root_statement is not null",
+                    &[holder, sess],
+                )
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => return err(500, format!("db: {e}")),
+            };
+            rows.into_iter().map(|r| r.get(0)).collect()
+        };
+        let owned_episodic_ctxs: Vec<String> = {
+            let rows = match conn
+                .query(
+                    "select record_iri
+                       from donto_x_memory_record
+                      where holder_iri = $1 and session_iri = $2
+                        and module_iri = 'mem:module/episodic'",
+                    &[holder, sess],
+                )
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => return err(500, format!("db: {e}")),
+            };
+            rows.into_iter().map(|r| r.get(0)).collect()
+        };
+        if owned_stmts.is_empty() && owned_episodic_ctxs.is_empty() {
+            // Holder owns nothing in this session.
+            return Json(json!({"count": 0, "facts": []})).into_response();
+        }
+
         let claims_ctx = format!("ctx:memory/claims/session/{sess}");
         let episodic_ctx = format!("ctx:memory/episodic/session/{sess}");
         conn.query(
@@ -309,9 +370,27 @@ pub async fn facts(
                from donto_statement s
               where s.context = any($1::text[])
                 and s.tx_time @> now()
+                -- Row is owned by the holder if:
+                --   (a) its subject is in the holder's episodic
+                --       record_iris (an episodic chunk we own), OR
+                --   (b) its statement_id is in the holder's
+                --       semantic-claim root_statement set, OR
+                --   (c) its subject (as uuid) is in the holder's
+                --       semantic-claim root_statements (the
+                --       mem:claim/derived_from edges we own).
+                and (
+                  s.subject = any($3::text[])
+                  or s.statement_id = any($4::uuid[])
+                  or (s.subject ~ '^[0-9a-f]{8}-' and s.subject::uuid = any($4::uuid[]))
+                )
               order by lower(s.tx_time) desc
               limit $2",
-            &[&vec![claims_ctx, episodic_ctx], &limit],
+            &[
+                &vec![claims_ctx, episodic_ctx],
+                &limit,
+                &owned_episodic_ctxs,
+                &owned_stmts,
+            ],
         )
         .await
     } else {
