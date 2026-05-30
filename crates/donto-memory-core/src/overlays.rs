@@ -576,6 +576,29 @@ pub async fn run_migrations(dsn: &str, dir: &std::path::Path) -> Result<i32, Ove
         let _ = c.batch_execute(&sql).await?;
         applied += 1;
     }
+    // Make sure the planner has stats on every memory overlay table.
+    // Autovacuum's threshold for ANALYZE is `50 + 0.1 * n_rows`, so on
+    // a small table (e.g. donto_x_memory_record with a few thousand
+    // records) it can be hours/days before autoanalyze fires for the
+    // first time. Until then the planner runs on no stats and may
+    // pick seq scans over a perfectly good btree index. Running
+    // ANALYZE here gives every fresh install good plans from row 1
+    // and costs nothing on a healthy DB (analyzes tiny tables).
+    if let Err(e) = c
+        .batch_execute(
+            "analyze donto_x_memory_module;
+             analyze donto_x_memory_state;
+             analyze donto_x_memory_access;
+             analyze donto_x_memory_record;
+             analyze donto_x_memory_job_log;
+             analyze donto_x_memory_reconsolidation_queue;",
+        )
+        .await
+    {
+        // Don't fail the migrate just because ANALYZE hit a missing
+        // table — older deploys may not have every table yet.
+        tracing::warn!(error = %e, "post-migrate ANALYZE warning (non-fatal)");
+    }
     Ok(applied)
 }
 
