@@ -986,7 +986,39 @@ that document will fail closed.
 
 ---
 
-## 14. Resources
+## 14. Operator surfaces & the ops token
+
+The `/jobs/*` and `/explore/*` paths expose every memorized text +
+recall query body. They are designed as **observability tools for
+the operator**, not as public agent surfaces. On any deployment
+that's reachable from the public internet, set
+`DONTO_MEMORY_OPS_TOKEN=<long-random-string>` on the runtime — this
+gates those 10 routes behind a bearer token:
+
+```bash
+# anonymous → 401
+curl https://memories.apexpots.com/jobs                # → 401
+
+# with the token via Authorization header
+curl -H 'Authorization: Bearer <token>' \
+  https://memories.apexpots.com/jobs                   # → 200
+
+# or via query string (handy in browser bookmarks)
+curl 'https://memories.apexpots.com/jobs?token=<token>'  # → 200
+```
+
+When the env var is **unset**, the routes are open (preserves the
+local-dev workflow). When set, the comparison is constant-time so
+the token can't be probed for length or prefix.
+
+The **agent contract** (`/`, `/agent.md`, `/llms.txt`,
+`/openapi.json`, `/docs`, `/memorize`, `/recall`, `/ingest/*`,
+`/modules`, `/version`, `/health`) is **never gated** — agents and
+documentation should always be reachable.
+
+---
+
+## 15. Resources
 
   - **Concrete integration patterns** (recall on the prompt path,
     conversation context shaping, mode policy, preference shortcuts,

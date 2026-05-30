@@ -19,6 +19,7 @@ mod docs;
 pub mod extract;
 pub mod job_log;
 mod openapi;
+mod ops_auth;
 mod routes;
 
 /// State shared across all routes.
@@ -31,7 +32,29 @@ pub struct AppState {
 
 pub fn router(state: AppState) -> Router {
     let state = Arc::new(state);
-    Router::new()
+
+    // /jobs/* and /explore/* expose memorized text + every recall
+    // query body — content that's never meant for anonymous public
+    // access. Gate them behind DONTO_MEMORY_OPS_TOKEN when set; if
+    // the env var is unset, the middleware is a pass-through
+    // (preserves the local-dev workflow).
+    let ops_routes = Router::new()
+        .route("/jobs", get(routes::jobs::list_html))
+        .route("/jobs/list.json", get(routes::jobs::list_json))
+        .route("/jobs/:id", get(routes::jobs::detail_html))
+        .route("/jobs/:id/raw", get(routes::jobs::detail_json))
+        .route("/explore", get(routes::explore::page))
+        .route("/explore/stats.json", get(routes::explore::stats))
+        .route("/explore/holders.json", get(routes::explore::holders))
+        .route("/explore/sessions.json", get(routes::explore::sessions))
+        .route("/explore/records.json", get(routes::explore::records))
+        .route("/explore/facts.json", get(routes::explore::facts))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            ops_auth::require_ops_token,
+        ));
+
+    let public_routes = Router::new()
         .route("/", get(homepage))
         .route("/api", get(api_summary))
         .route("/health", get(routes::health::health))
@@ -51,17 +74,10 @@ pub fn router(state: AppState) -> Router {
         .route("/docs", get(swagger_ui))
         .route("/agent.md", get(agent_md))
         .route("/integration-patterns.md", get(integration_patterns_md))
-        .route("/llms.txt", get(llms_txt))
-        .route("/jobs", get(routes::jobs::list_html))
-        .route("/jobs/list.json", get(routes::jobs::list_json))
-        .route("/jobs/:id", get(routes::jobs::detail_html))
-        .route("/jobs/:id/raw", get(routes::jobs::detail_json))
-        .route("/explore", get(routes::explore::page))
-        .route("/explore/stats.json", get(routes::explore::stats))
-        .route("/explore/holders.json", get(routes::explore::holders))
-        .route("/explore/sessions.json", get(routes::explore::sessions))
-        .route("/explore/records.json", get(routes::explore::records))
-        .route("/explore/facts.json", get(routes::explore::facts))
+        .route("/llms.txt", get(llms_txt));
+
+    public_routes
+        .merge(ops_routes)
         .with_state(state)
         .layer(TraceLayer::new_for_http())
         .layer(

@@ -64,6 +64,14 @@ pub struct Settings {
     /// labels, screenshots, signs, etc. become searchable via
     /// /recall query=. Default true.
     pub ocr_enabled: bool,
+
+    /// Optional bearer token gating the operator-facing observability
+    /// surfaces (/jobs/* and /explore/*). When set, requests must
+    /// carry `Authorization: Bearer <token>` or `?token=<token>`.
+    /// When unset (default), those routes are open — fine for local
+    /// development but **leaves full memorized text content readable
+    /// by anonymous internet visitors** on any public deployment.
+    pub ops_token: Option<String>,
 }
 
 impl Default for Settings {
@@ -91,6 +99,7 @@ impl Default for Settings {
             extract_mode: "exhaustive".to_string(),
             job_log_retention_days: 30,
             ocr_enabled: true,
+            ops_token: None,
         }
     }
 }
@@ -183,6 +192,12 @@ impl Settings {
         }
         if let Ok(v) = std::env::var("DONTO_MEMORY_OCR_ENABLED") {
             s.ocr_enabled = !matches!(v.as_str(), "false" | "0" | "no");
+        }
+        if let Ok(v) = std::env::var("DONTO_MEMORY_OPS_TOKEN") {
+            let trimmed = v.trim();
+            if !trimmed.is_empty() {
+                s.ops_token = Some(trimmed.to_string());
+            }
         }
         s
     }
