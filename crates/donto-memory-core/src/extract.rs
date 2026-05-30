@@ -782,6 +782,27 @@ hypothesis_only (boolean). Reuse existing donto vocabulary where \
 obvious (ex:hasName, ex:knownAs, ex:locatedIn, ex:bornIn, \
 ex:occurredAt, ex:metAt, ex:hasOccupation, ex:hasFather, ex:hasChild, \
 ex:residesIn, rdf:type). Coin new ex:* predicates when needed. \
+\n\n\
+SUPPRESS STRUCTURAL BOILERPLATE. The donto-memory runtime already \
+records, in its own overlay tables and via context naming: which \
+agent holds the memory, the episodic chunk's record IRI, the \
+holder's identity, the session IRI, the timestamp, and the platform. \
+DO NOT emit facts that merely restate the holder, the agent, the \
+session IRI, the platform (e.g. Discord), the episodic-chunk-as-\
+EpisodicMemoryChunk typing, or guild/channel-ids parsed out of the \
+session string. Focus 95% of your output on facts implied by the \
+MESSAGE CONTENT itself; let donto handle the metadata. \n\n\
+USE CANONICAL ENTITY IRIs. For chat messages of the form \
+\"<user> in #<channel>: <body>\", normalize entities to: \
+discord:user:<user>, discord:channel:<channel>, \
+discord:message:<id-or-uuid-if-unknown>. Never mint user IRIs as \
+bare handles or with a different prefix; cross-message recall \
+depends on these being stable. \n\n\
+LENGTH-CONDITION YIELD. Aim for one content fact per 2-3 words of \
+input body (excluding the \"<user> in #<channel>: \" prefix). \
+Under-yield rather than over-yield on short utterances — a future \
+call can fill gaps if needed. A 3-word body should produce at most \
+~5 content facts plus the user/channel/message linkages. \n\n\
 No prose, no markdown. STRICT JSON only.";
 
 const SINGLE_PROMPT: &str = "You are an aggressive ontological \
