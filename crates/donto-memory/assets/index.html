@@ -233,11 +233,14 @@
     <div class="hero-statement">
       <strong>If you are an AI agent</strong> reading this page: you have
       two endpoints to know. <code>POST /memorize</code> takes raw text
-      and stores it — plus ~50–250 ontological statements an LLM extracts
+      (and optionally images — OCR + vision extraction run
+      automatically) and stores it as ~50–250 ontological statements an LLM extracts
       from it. <code>POST /recall</code> takes a query and returns
       everything we know that matches, with policy + ranking applied.
       Read <a href="/agent.md">the agent guide</a> for the full
-      contract.
+      contract, or
+      <a href="/integration-patterns.md">the integration spec</a>
+      for ship-order patterns.
     </div>
 
     <p>
@@ -401,6 +404,25 @@ curl -X POST https://memories.apexpots.com/recall \
         <code>ctx:memory/claims/session/&lt;session_id&gt;</code>,
         linked back to the episodic chunk via
         <code>mem:claim/derived_from</code>.
+      </li>
+      <li>
+        <strong>Multimodal (optional).</strong> Pass an
+        <code>images: [...]</code> array of http(s) URLs or
+        <code>data:image/...;base64,…</code> data URLs and donto-memory
+        runs an OCR pre-pass (transcribed words get appended to the
+        episodic chunk as <code>[OCR text from image #N]\n&lt;words&gt;</code>
+        blocks, so screenshots and signs become searchable via
+        <code>/recall?query=…</code>) then switches the structured
+        extractor to OpenAI multimodal format using the configured
+        <code>DONTO_MEMORY_LLM_VISION_MODEL</code> — currently
+        <code>openai/gpt-4o-mini</code> in production. The episodic
+        chunk now contains your text plus the OCR transcripts; the
+        extracted facts describe both the visible text and the visual
+        content. <code>mode: "single"</code> is the sweet spot for
+        images; <code>exhaustive</code> multiplies token cost across
+        5 apertures. See
+        <a href="/agent.md#4-endpoint-reference">agent guide §4</a>
+        for the full request shape.
       </li>
       <li>
         <strong>Receipt.</strong> You receive the episodic record IDs,

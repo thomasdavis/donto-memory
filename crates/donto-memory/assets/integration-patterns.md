@@ -377,15 +377,89 @@ This is sometimes higher-signal than the rolling-N-message context
 window (Tier 1.1), because Discord replies are explicit references
 the model can rely on.
 
-### 3.8 — Attachments and links
+### 3.8 — Image attachments (multimodal /memorize)
 
-Prepend a soft marker per attachment/link so the LLM can extract
-facts about it even without seeing the bytes:
+Discord users send screenshots and photos constantly. donto-memory
+accepts them directly via the `images` field on `POST /memorize` —
+each entry is an http(s) URL the LLM provider can fetch or a
+`data:image/...;base64,…` data URL with the bytes inline.
+
+When images are present, two things happen automatically before the
+normal extraction:
+
+1. **OCR pass** — one vision-LLM call transcribes every word visible
+   in the image(s). The transcripts get appended to your `text`
+   field as `[OCR text from image #N]\n<transcript>` blocks before
+   the episodic chunk is stored. Visible labels in screenshots,
+   captions on memes, code snippets, signs, watermarks — all
+   become searchable later via `POST /recall query=<keyword>`.
+2. **Vision extraction** — the structured-fact extractor sees the
+   image alongside the augmented text and yields typed triples
+   about objects in the scene plus the transcribed words.
+
+```ts
+// Discord message → /memorize with image attachments
+const imageUrls = Array.from(msg.attachments.values())
+  .filter(a => a.contentType?.startsWith('image/'))
+  .map(a => a.url);                     // Discord CDN URLs are fetch-friendly
+
+if (imageUrls.length > 0) {
+  await fetch(`${MEMORIES}/memorize`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      holder:     'agent:omega-bot',
+      session_id: `discord:user:${msg.author.id}`,
+      text:       msg.content || '',     // safe to send empty; OCR fills it
+      mode:       'single',              // exhaustive × N images is expensive
+      images:     imageUrls,
+    }),
+  });
+}
+```
+
+**Latency expectations.** Single-mode + 1 image runs in ~10-15 s on
+`openai/gpt-4o-mini`. Exhaustive mode multiplies vision tokens
+across 5 apertures + the OCR pass — usually only worth it for
+high-value content. The OCR pass alone is ~2-5 s.
+
+**Inline base64 (when the bytes are local).** If you can't expose a
+public URL — e.g. an upload your bot hasn't forwarded yet — convert
+to a data URL. Cap the payload (50 KB is fine, ~1 MB is the
+practical ceiling) because the LLM API charges by image-token
+count, and the donto-memory audit log stores a truncated marker
+rather than the bytes themselves.
+
+```ts
+const dataUrl = `data:image/png;base64,${buf.toString('base64')}`;
+// Then images: [dataUrl] as above.
+```
+
+**Tombstoning images.** OCR text + extracted facts land in
+donto_statement (append-only, paraconsistent). The image bytes
+themselves are NOT stored by donto-memory — only the URL or the
+truncated audit marker. If you need the image bytes content-
+addressed and tombstoneable later (Discord delete → memory delete),
+register them as a `donto_blob` first per §1.3, then call
+`/memorize` with both `images: [...]` and `source_record_iri`
+pointing at the document IRI.
+
+**Disable OCR.** Set `DONTO_MEMORY_OCR_ENABLED=false` on the runtime
+if you only want vision fact extraction without the text-transcribe
+pre-pass. The image still gets sent to the extractor; you just skip
+the OCR round-trip.
+
+### 3.8a — Non-image attachments and bare links
+
+For non-image attachments (PDFs, audio, video) and naked URLs in the
+message body, prepend a soft marker so the LLM can extract facts
+about them even without seeing the bytes:
 
 ```ts
 function annotateAttachments(msg: DiscordMessage): string {
   const tags: string[] = [];
   for (const att of msg.attachments.values()) {
+    if (att.contentType?.startsWith('image/')) continue;   // handled by §3.8
     tags.push(`[attachment ${att.contentType ?? 'unknown'}: ${att.name}]`);
   }
   for (const url of (msg.content.match(/https?:\/\/\S+/g) ?? [])) {
@@ -398,7 +472,7 @@ function annotateAttachments(msg: DiscordMessage): string {
 ```
 
 The LLM produces facts like
-`(msg, ex:hasAttachment, "screenshot.png")` and
+`(msg, ex:hasAttachment, "report.pdf")` and
 `(msg, ex:references, "https://example.com/article")`. If you later
 register the attachment as a `donto_blob` (via `donto blob
 upload`), the fact has a real anchor; otherwise it's a string
@@ -460,10 +534,11 @@ Don't expect it to compress wall-time on exhaustive mode.
 | Mode policy + skip rules (§2.4) | T2 | 30 min | cuts cost ~70% |
 | Preference direct-ingest (§2.5) | T2 | 30 min | preferences instant + clean |
 | Source registration (§1.3) | T1 | 1 h | unlocks tombstoning |
-| Reply + attachment context (§3.7, §3.8) | T3 | 1 h | richer fact graph |
+| Image attachments via `images: [...]` (§3.8) | T3 | 30 min | screenshots/photos become first-class memories with OCR |
+| Reply + non-image attachment context (§3.7, §3.8a) | T3 | 1 h | richer fact graph |
 | Batch on bursts (§3.9) | T3 | 30 min | only if rate-limited |
 
-Total: ~5 hours for the full integration upgrade.
+Total: ~5.5 hours for the full integration upgrade.
 
 ---
 
@@ -473,7 +548,8 @@ The endpoints these patterns hit, with their minimal request bodies:
 
 ```ts
 // POST /memorize → memorize.MemorizeResp
-{ holder, text, session_id?, mode?, source_record_iri?, extract? }
+{ holder, text, session_id?, mode?, source_record_iri?, extract?,
+  images?: string[] /* http URLs or data: URLs; triggers OCR + vision */ }
 
 // POST /memorize/batch → { results: MemorizeResp[] }
 { items: MemorizeReq[] }
