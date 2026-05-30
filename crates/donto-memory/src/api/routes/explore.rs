@@ -259,27 +259,32 @@ pub async fn facts(
             )
             .await
         } else if iri.starts_with("ctx:memory/episodic/") {
-            // Path 2: derived-from lookup. The substrate stores the
-            // derived_from edge as a statement with the derived
-            // claim's statement_id as the subject (as text), this
-            // episodic record_iri as the object_iri.
+            // Path 2: derived-from lookup.
+            //
+            // Edge stored as a statement (subject=derived stmt_id as
+            // text, predicate=mem:claim/derived_from,
+            // object_iri=this episodic record_iri).
+            //
+            // The naive join `src.text = s.statement_id::text` made
+            // the planner seq-scan 39M rows because the PK index on
+            // donto_statement.statement_id is on the uuid column.
+            // We cast the subjects to uuid in the subquery so the
+            // PK index handles the lookup.
             conn.query(
-                "with sources as (
-                   select subject as derived_stmt_id_text
-                     from donto_statement
-                    where predicate = 'mem:claim/derived_from'
-                      and object_iri = $1
-                      and upper(tx_time) is null
-                 )
-                 select s.statement_id::text as statement_id,
+                "select s.statement_id::text as statement_id,
                         s.subject, s.predicate,
                         s.object_iri, s.object_lit,
                         s.context, s.flags,
                         lower(s.tx_time) as tx_lo
                    from donto_statement s
-                   join sources src on src.derived_stmt_id_text = s.statement_id::text
-                  where upper(s.tx_time) is null
-                  order by s.tx_time desc
+                  where s.statement_id = any(
+                          select subject::uuid
+                            from donto_statement
+                           where predicate = 'mem:claim/derived_from'
+                             and object_iri = $1
+                             and upper(tx_time) is null
+                        )
+                    and upper(s.tx_time) is null
                   limit $2",
                 &[iri, &limit],
             )
