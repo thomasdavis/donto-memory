@@ -119,6 +119,17 @@ async fn api(bind: Option<String>) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("DONTO_MEMORY_DONTO_DSN required"))?;
     let pool = overlays::pool_from_dsn(&dsn)?;
 
+    // Any "POST /memorize (queued)" audit row without a matching
+    // "POST /memorize (async)" / "POST /memorize (async-failed)" was
+    // a tokio task that died across a previous restart. Surface them
+    // in the audit log so the /jobs page shows the failure and an
+    // operator can decide whether to re-memorize the input.
+    match mark_orphaned_queued_rows(&pool, &settings.consumer_iri).await {
+        Ok(n) if n > 0 => tracing::warn!(orphaned = n, "marked stale (lost) queued memorize rows from prior runs"),
+        Ok(_) => {}
+        Err(e) => tracing::warn!(error = %e, "orphan-mark on startup failed; continuing"),
+    }
+
     let app = api::router(api::AppState {
         settings: settings.clone(),
         substrate: substrate.clone(),
@@ -130,6 +141,47 @@ async fn api(bind: Option<String>) -> Result<()> {
     tracing::info!(bind = %settings.api_bind, "donto-memory api listening");
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+/// Find every `(queued)` audit row whose queue_id has no matching
+/// `(async)` / `(async-failed)` completion, and write a
+/// `POST /memorize (lost)` audit row for each. Only touches rows older
+/// than 60 seconds so a healthy in-flight task isn't flagged.
+async fn mark_orphaned_queued_rows(
+    pool: &deadpool_postgres::Pool,
+    consumer_iri: &str,
+) -> Result<u64> {
+    let c = pool.get().await?;
+    let n = c
+        .execute(
+            "insert into donto_x_memory_job_log
+                 (consumer_iri, endpoint, holder, session_id, status_code,
+                  elapsed_ms, request, response, error)
+             select $1, 'POST /memorize (lost)', q.holder, q.session_id, 500, 0,
+                    q.request,
+                    jsonb_build_object(
+                      'orphaned_queue_id', q.response->>'queue_id',
+                      'queued_at', to_jsonb(q.created_at),
+                      'note', 'background extraction task did not complete; likely killed by API restart'
+                    ),
+                    'orphaned (likely lost to API restart before completion)'
+               from donto_x_memory_job_log q
+              where q.endpoint = 'POST /memorize (queued)'
+                and q.created_at < now() - interval '60 seconds'
+                and not exists (
+                  select 1 from donto_x_memory_job_log a
+                   where a.endpoint in ('POST /memorize (async)', 'POST /memorize (async-failed)')
+                     and a.response->>'queue_id' = q.response->>'queue_id'
+                )
+                and not exists (
+                  select 1 from donto_x_memory_job_log l
+                   where l.endpoint = 'POST /memorize (lost)'
+                     and l.response->>'orphaned_queue_id' = q.response->>'queue_id'
+                )",
+            &[&consumer_iri],
+        )
+        .await?;
+    Ok(n)
 }
 
 async fn worker(once: bool) -> Result<()> {
