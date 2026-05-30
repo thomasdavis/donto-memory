@@ -59,6 +59,38 @@ pub fn document() -> Value {
                     "responses": { "200": { "description": "OK" } }
                 }
             },
+            "/api": {
+                "get": {
+                    "tags": ["system"],
+                    "summary": "Categorized endpoint summary + ops-token state",
+                    "description":
+                        "Lists every endpoint grouped as `agent_contract` (never gated), \
+                         `documentation` (never gated), or `operator` (gated when \
+                         `DONTO_MEMORY_OPS_TOKEN` is set). The `ops_token_required` flag \
+                         lets monitoring detect whether the gate is active. Always open.",
+                    "responses": {
+                        "200": {
+                            "description": "Endpoint inventory",
+                            "content": {
+                                "application/json": {
+                                    "schema": { "$ref": "#/components/schemas/ApiSummary" },
+                                    "example": {
+                                        "service": "donto-memory",
+                                        "version": "0.1.0",
+                                        "substrate_contract_floor": "0.1.0-m10",
+                                        "endpoints": {
+                                            "agent_contract": ["GET /health", "POST /memorize", "POST /recall"],
+                                            "documentation": ["GET /", "GET /agent.md", "GET /openapi.json"],
+                                            "operator": ["GET /jobs", "GET /explore"]
+                                        },
+                                        "ops_token_required": true
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
             "/version": {
                 "get": {
                     "tags": ["system"],
@@ -350,6 +382,18 @@ pub fn document() -> Value {
                     "responses": { "200": { "description": "HTML" } }
                 }
             },
+            "/integration-patterns.md": {
+                "get": {
+                    "tags": ["system"],
+                    "summary": "Markdown ship-recipe spec for agent backend devs",
+                    "description":
+                        "Concrete TypeScript-flavored patterns for wiring an existing \
+                         conversational backend (Discord/Slack/web bot) into donto-memory. \
+                         Tiered by impact, ~2700 words. Read this after /agent.md when \
+                         building a new integration.",
+                    "responses": { "200": { "description": "markdown", "content": { "text/markdown": {} } } }
+                }
+            },
             "/agent.md": {
                 "get": {
                     "tags": ["system"],
@@ -443,6 +487,86 @@ pub fn document() -> Value {
                             }
                         },
                         "404": { "description": "Job not found" }
+                    }
+                }
+            },
+            "/explore": {
+                "get": {
+                    "tags": ["operator"],
+                    "security": [{"opsBearer": []}],
+                    "summary": "HTML memory-explorer page — OPERATOR",
+                    "description":
+                        "Three-pane progressive drill-down: holders → sessions → records → \
+                         facts. Backed by /explore/*.json endpoints below. Same ops-token gate.",
+                    "responses": { "200": { "description": "HTML" } }
+                }
+            },
+            "/explore/stats.json": {
+                "get": {
+                    "tags": ["operator"],
+                    "security": [{"opsBearer": []}],
+                    "summary": "Aggregate overlay stats (records / holders / sessions / modules / recall_events) — OPERATOR",
+                    "responses": { "200": { "description": "OK", "content": { "application/json": {} } } }
+                }
+            },
+            "/explore/holders.json": {
+                "get": {
+                    "tags": ["operator"],
+                    "security": [{"opsBearer": []}],
+                    "summary": "Distinct holders with record + session counts — OPERATOR",
+                    "parameters": [
+                        { "name": "q", "in": "query", "schema": {"type": "string"}, "description": "Substring filter on holder IRI." },
+                        { "name": "limit", "in": "query", "schema": {"type": "integer", "default": 100} }
+                    ],
+                    "responses": { "200": { "description": "OK", "content": { "application/json": {} } } }
+                }
+            },
+            "/explore/sessions.json": {
+                "get": {
+                    "tags": ["operator"],
+                    "security": [{"opsBearer": []}],
+                    "summary": "Sessions for a holder, grouped by module — OPERATOR",
+                    "parameters": [
+                        { "name": "holder", "in": "query", "required": true, "schema": {"type": "string"} },
+                        { "name": "limit", "in": "query", "schema": {"type": "integer", "default": 100} }
+                    ],
+                    "responses": { "200": { "description": "OK", "content": { "application/json": {} } } }
+                }
+            },
+            "/explore/records.json": {
+                "get": {
+                    "tags": ["operator"],
+                    "security": [{"opsBearer": []}],
+                    "summary": "Records owned by a holder, optionally filtered by session/module — OPERATOR",
+                    "parameters": [
+                        { "name": "holder", "in": "query", "required": true, "schema": {"type": "string"} },
+                        { "name": "session", "in": "query", "schema": {"type": "string"} },
+                        { "name": "module", "in": "query", "schema": {"type": "string"} },
+                        { "name": "limit", "in": "query", "schema": {"type": "integer", "default": 100} }
+                    ],
+                    "responses": { "200": { "description": "OK", "content": { "application/json": {} } } }
+                }
+            },
+            "/explore/facts.json": {
+                "get": {
+                    "tags": ["operator"],
+                    "security": [{"opsBearer": []}],
+                    "summary": "Underlying substrate facts, scoped by record or session — OPERATOR",
+                    "description":
+                        "Two query modes. `?record_iri=ctx:memory/claim/<uuid>` returns the single \
+                         claim. `?record_iri=ctx:memory/episodic/<uuid>` returns all derived facts \
+                         via mem:claim/derived_from edges. `?session=X&holder=Y` walks both \
+                         session-scoped contexts isolated to one holder. `holder` is REQUIRED \
+                         when `session` is set to prevent cross-holder leakage.",
+                    "parameters": [
+                        { "name": "record_iri", "in": "query", "schema": {"type": "string"} },
+                        { "name": "session", "in": "query", "schema": {"type": "string"} },
+                        { "name": "holder", "in": "query", "schema": {"type": "string"}, "description": "Required when `session` is set." },
+                        { "name": "limit", "in": "query", "schema": {"type": "integer", "default": 100, "maximum": 2000} }
+                    ],
+                    "responses": {
+                        "200": { "description": "OK", "content": { "application/json": {} } },
+                        "400": { "description": "Either `record_iri` or (`session` AND `holder`) required." }
                     }
                 }
             }
@@ -548,6 +672,27 @@ pub fn document() -> Value {
                         "module_iri":        { "type": "string", "nullable": true },
                         "score":             { "type": "number", "nullable": true },
                         "rank":              { "type": "integer", "nullable": true }
+                    }
+                },
+                "ApiSummary": {
+                    "type": "object",
+                    "description": "Response from GET /api.",
+                    "properties": {
+                        "service":                  { "type": "string", "example": "donto-memory" },
+                        "version":                  { "type": "string", "example": "0.1.0" },
+                        "substrate_contract_floor": { "type": "string", "example": "0.1.0-m10" },
+                        "endpoints": {
+                            "type": "object",
+                            "properties": {
+                                "agent_contract": { "type": "array", "items": { "type": "string" } },
+                                "documentation":  { "type": "array", "items": { "type": "string" } },
+                                "operator":       { "type": "array", "items": { "type": "string" } }
+                            }
+                        },
+                        "ops_token_required": {
+                            "type": "boolean",
+                            "description": "True when DONTO_MEMORY_OPS_TOKEN is set on the runtime. /jobs and /explore require the bearer token in that case."
+                        }
                     }
                 },
                 "JobRow": {
