@@ -642,13 +642,26 @@ allowed rows.
 
 ## 8. Cost expectations
 
-LLM token cost dominates `/memorize` cost.
+LLM token cost dominates `/memorize` cost. Pick mode deliberately —
+the gap between cheapest and most expensive is **20×+**:
 
   - `mode: "single"` — 1 LLM call. On `z-ai/glm-5`:
     ~300 prompt + ~3-8 K completion = **~$0.005-$0.015** per memorize
-    on OpenRouter.
+    on OpenRouter. ~30-100 s end-to-end.
   - `mode: "exhaustive"` — 5 parallel LLM calls. ~1.8 K prompt + ~15-25 K
-    completion total = **~$0.04-$0.07** per memorize.
+    completion total = **~$0.04-$0.07** per memorize. ~60-180 s.
+  - `mode: "deep"` (N sequential passes; default 3, max 10) — each
+    pass after the first sends a growing `prior_facts_block` to the
+    model so it can find new angles. Measured on real omega-bot
+    Discord traffic at **`passes: 7`** (the bot's current setting):
+    avg **~75 K tokens per call**, avg **~13 minutes** wall-clock,
+    avg cost **~$0.05–$0.20** per call. Around **60% of passes hit
+    JSON truncation** at high pass counts because the prior-facts
+    context fills the input window, leaving too little room for the
+    completion; the runtime's recovery walker salvages most of them
+    but pass-4-onwards yields decline. **Tune `passes` to 3 or 4
+    unless you specifically want maximum extraction breadth and are
+    willing to pay for it.**
 
 Recall has no LLM cost. Latency depends almost entirely on the
 substrate-side `/recall` pipeline:
@@ -675,9 +688,19 @@ session, wrap the recall in a `Promise.race` against a 500 ms
 timer and fall through to the base prompt — losing context is
 better than losing the turn.
 
-If you're processing thousands of memorize calls/day, `single` mode
-is the right default. If you're processing dozens but they're
-important (user profile facts, key conversations), use `exhaustive`.
+### Picking a mode
+
+  - **Thousands of memorize calls/day**: `single`. Cheap, fast,
+    fits in the Cloudflare timeout, runs sync.
+  - **Dozens/day of important content** (user profile facts, key
+    conversations, hand-curated documents): `exhaustive`. Better
+    coverage, parallel apertures, auto-defers to async.
+  - **You explicitly want maximum extraction breadth** on a
+    high-value chunk (e.g. a technical writeup you'll query against
+    later via predicate filter): `deep` with `passes: 3-4`.
+    Higher pass counts cost more per call AND lose facts to
+    truncation on long inputs; 3-4 is the sweet spot before
+    diminishing returns set in.
 
 ---
 
