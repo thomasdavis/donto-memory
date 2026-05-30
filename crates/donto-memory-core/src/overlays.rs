@@ -27,6 +27,11 @@ pub enum OverlayError {
 }
 
 /// Build a deadpool_postgres pool from a DSN string.
+///
+/// Pool size is bumped to 32 from the deadpool default of 10. Every
+/// /recall in donto-memory grabs ~3 connections briefly (substrate
+/// proxy call, access event write, audit log write); the default
+/// silently times out the 6th concurrent recall.
 pub fn pool_from_dsn(dsn: &str) -> Result<Pool, OverlayError> {
     let pg_cfg = tokio_postgres::Config::from_str(dsn)
         .map_err(|e| OverlayError::Config(e.to_string()))?;
@@ -45,6 +50,7 @@ pub fn pool_from_dsn(dsn: &str) -> Result<Pool, OverlayError> {
     cfg.manager = Some(ManagerConfig {
         recycling_method: RecyclingMethod::Fast,
     });
+    cfg.pool = Some(deadpool_postgres::PoolConfig::new(32));
     cfg.create_pool(Some(Runtime::Tokio1), NoTls)
         .map_err(|e| OverlayError::Config(e.to_string()))
 }

@@ -19,10 +19,30 @@ pub async fn version(State(s): State<Arc<AppState>>) -> Json<serde_json::Value> 
 }
 
 pub async fn substrate(State(s): State<Arc<AppState>>) -> impl IntoResponse {
-    let contract = s.substrate.contract_version().await;
-    let health = s.substrate.substrate_health().await;
+    // The substrate's /discovery/substrate-health query can take 20+
+    // seconds on prod-sized corpora (count(*) over the 39M-row
+    // donto_statement table). Run contract + health in parallel and
+    // fast-fail health at 8s so monitoring polls don't block on the
+    // diagnostic.
+    let contract_fut = s.substrate.contract_version();
+    let health_fut = tokio::time::timeout(
+        std::time::Duration::from_secs(8),
+        s.substrate.substrate_health(),
+    );
+    let (contract, health) = tokio::join!(contract_fut, health_fut);
+
+    let health_json = match health {
+        Ok(Ok(v)) => v,
+        Ok(Err(e)) => json!({"error": format!("substrate-health failed: {e}")}),
+        Err(_) => json!({
+            "error": "substrate-health timeout (>8s) — counts over the substrate's \
+                      donto_statement table are slow at scale. Hit \
+                      GET /discovery/substrate-health on dontosrv directly for the full \
+                      response."
+        }),
+    };
     Json(json!({
         "contract": contract.ok(),
-        "health": health.ok().or_else(|| Some(json!({"error": "unavailable"}))),
+        "health": health_json,
     }))
 }
