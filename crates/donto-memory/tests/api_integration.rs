@@ -7,8 +7,6 @@
 //! Run via:
 //!   cargo test -p donto-memory --test api_integration -- --test-threads=1
 
-use std::sync::Arc;
-
 use axum::body::Body;
 use axum::http::{header, Method, Request, StatusCode};
 use donto_memory_core::{

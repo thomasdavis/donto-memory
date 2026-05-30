@@ -753,6 +753,8 @@ async fn extracted_fact_round_trips_object_iri() {
         object_lit: None,
         confidence: Some(0.91),
         modality: Some("inferred".into()),
+        hypothesis_only: None,
+        aperture: None,
         notes: None,
     };
     let s = serde_json::to_string(&f).unwrap();
@@ -771,6 +773,8 @@ async fn extracted_fact_round_trips_object_lit() {
         object_lit: Some(serde_json::json!({"v": 1979, "dt": "xsd:integer"})),
         confidence: Some(0.7),
         modality: None,
+        hypothesis_only: None,
+        aperture: None,
         notes: None,
     };
     let s = serde_json::to_string(&f).unwrap();

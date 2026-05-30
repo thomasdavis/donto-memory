@@ -52,16 +52,61 @@ pub struct ExtractedFact {
     pub object_iri: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub object_lit: Option<serde_json::Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_lenient_f64",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub confidence: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub modality: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_lenient_bool",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub hypothesis_only: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aperture: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
+}
+
+/// Accept bool, "true"/"false" strings, or 0/1 numerics. Reasoning
+/// models occasionally stringify their booleans, which previously
+/// killed an entire aperture yield.
+fn deserialize_lenient_bool<'de, D>(d: D) -> Result<Option<bool>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(match v {
+        serde_json::Value::Null => None,
+        serde_json::Value::Bool(b) => Some(b),
+        serde_json::Value::String(s) => match s.to_lowercase().as_str() {
+            "true" | "yes" | "1" => Some(true),
+            "false" | "no" | "0" | "" => Some(false),
+            _ => None,
+        },
+        serde_json::Value::Number(n) => Some(n.as_f64().map(|x| x != 0.0).unwrap_or(false)),
+        _ => None,
+    })
+}
+
+/// Accept f64, integers, or stringified numbers. Same rationale as
+/// the lenient bool above.
+fn deserialize_lenient_f64<'de, D>(d: D) -> Result<Option<f64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(match v {
+        serde_json::Value::Null => None,
+        serde_json::Value::Number(n) => n.as_f64(),
+        serde_json::Value::String(s) => s.trim().parse::<f64>().ok(),
+        serde_json::Value::Bool(b) => Some(if b { 1.0 } else { 0.0 }),
+        _ => None,
+    })
 }
 
 impl ExtractedFact {
@@ -346,9 +391,14 @@ impl MemoryExtractor {
     ) -> Result<OneCallResult, ExtractError> {
         let started = std::time::Instant::now();
         let user_prompt = build_user_prompt(text, holder, session_id, source_record_iri);
+        // Reasoning models (z-ai/glm-5 etc.) sometimes return null
+        // `content` when the reasoning budget is too tight to leave
+        // room for the JSON output. We give them a generous overall
+        // budget and don't cap the reasoning channel separately.
         let req = serde_json::json!({
             "model": self.model,
             "temperature": self.temperature,
+            "max_tokens": 8000,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
@@ -374,10 +424,21 @@ impl MemoryExtractor {
             .json()
             .await
             .map_err(|e| ExtractError::Decode(e.to_string()))?;
-        let content = chat
+        // Some reasoning models put their JSON in `reasoning_content`
+        // when `content` ends up null (the model "thought" the answer
+        // but never committed it as a visible turn). Try both fields.
+        let msg = chat
             .choices
             .first()
-            .and_then(|c| c.message.content.clone())
+            .map(|c| &c.message)
+            .ok_or_else(|| ExtractError::Decode("no message in response".into()))?;
+        let content = msg
+            .content
+            .as_ref()
+            .filter(|s| !s.trim().is_empty())
+            .or(msg.reasoning_content.as_ref().filter(|s| !s.trim().is_empty()))
+            .or(msg.reasoning.as_ref().filter(|s| !s.trim().is_empty()))
+            .cloned()
             .ok_or_else(|| ExtractError::Decode("no message content".into()))?;
         let stripped = strip_markdown_code_fence(&content);
         let parsed: FactsEnvelope = serde_json::from_str(&stripped).map_err(|e| {
@@ -522,6 +583,12 @@ struct ChatChoice {
 struct ChatMessage {
     #[serde(default)]
     content: Option<String>,
+    /// Reasoning-model fallback: some providers put the actual answer
+    /// here when `content` is null after a long reasoning pass.
+    #[serde(default)]
+    reasoning_content: Option<String>,
+    #[serde(default)]
+    reasoning: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -630,5 +697,31 @@ mod tests {
         ] {
             assert!(ids.contains(&expected), "{expected} missing");
         }
+    }
+
+    /// Regression test for the lenient bool deserializer. Reasoning
+    /// models like z-ai/glm-5 occasionally emit `"true"` (string)
+    /// instead of `true` (bool); this previously killed an entire
+    /// aperture yield with `invalid type: string "true", expected a
+    /// boolean`.
+    #[test]
+    fn extracted_fact_accepts_stringified_bool() {
+        let raw = r#"{
+            "subject":"ex:s","predicate":"ex:p","object_iri":"ex:o",
+            "hypothesis_only":"true","confidence":0.7
+        }"#;
+        let f: ExtractedFact = serde_json::from_str(raw).unwrap();
+        assert_eq!(f.hypothesis_only, Some(true));
+    }
+
+    /// Confidence sometimes comes back as a string. Same justification.
+    #[test]
+    fn extracted_fact_accepts_stringified_confidence() {
+        let raw = r#"{
+            "subject":"ex:s","predicate":"ex:p","object_iri":"ex:o",
+            "confidence":"0.85"
+        }"#;
+        let f: ExtractedFact = serde_json::from_str(raw).unwrap();
+        assert!((f.confidence.unwrap() - 0.85).abs() < 1e-9);
     }
 }

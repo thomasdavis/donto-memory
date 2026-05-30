@@ -386,9 +386,9 @@ curl -X POST https://memories.apexpots.com/recall \
         modes:
         <ul>
           <li><span class="badge">single</span> One prompt. ~20-40 facts.
-            ~5-10 s.</li>
+            ~30-100 s on z-ai/glm-5.</li>
           <li><span class="badge">exhaustive</span> Five parallel prompts.
-            ~80-250 facts. ~30-90 s. <strong>This is the default.</strong></li>
+            ~80-250 facts. ~60-180 s. <strong>This is the default.</strong></li>
         </ul>
       </li>
       <li>
@@ -570,8 +570,8 @@ curl -X POST https://memories.apexpots.com/recall \
        of LLM cost.</p>
     <table>
       <tr><th>Mode</th><th>LLM calls</th><th>Tokens</th><th>~Cost (OpenRouter glm-5)</th><th>Latency</th></tr>
-      <tr><td><code>single</code></td><td>1</td><td>~300 + ~3-8K</td><td>$0.005–$0.015</td><td>5–10 s</td></tr>
-      <tr><td><code>exhaustive</code></td><td>5 parallel</td><td>~1.8K + ~15-25K</td><td>$0.04–$0.07</td><td>30–90 s</td></tr>
+      <tr><td><code>single</code></td><td>1</td><td>~400 + ~5-8K</td><td>$0.015–$0.030</td><td>30–100 s</td></tr>
+      <tr><td><code>exhaustive</code></td><td>5 parallel</td><td>~2K + ~15-25K</td><td>$0.04–$0.08</td><td>60–180 s</td></tr>
     </table>
     <p>
       Recall typically completes in under 100 ms on the standard

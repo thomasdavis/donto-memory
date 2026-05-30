@@ -107,17 +107,17 @@ When you call `POST /memorize`, this happens:
    canonical bytes-on-disk version of what you sent.
 2. **An LLM (default `z-ai/glm-5`) processes the chunk** through
    one of two modes:
-   - `single` (one prompt, ~20-40 facts, ~5-10 s).
+   - `single` (one prompt, ~30-100 facts, ~30-100 s on z-ai/glm-5).
    - `exhaustive` (five parallel aperture prompts —
      surface, linguistic, presupposition, inferential,
-     conceivable — ~80-250 facts, ~30-90 s, ~5× tokens). **This is
+     conceivable — ~80-250 facts, ~60-180 s, ~5× tokens). **This is
      the default**.
 3. **Every extracted fact** is asserted into the substrate as a
    typed claim `(subject, predicate, object)` with a
    `source_record_iri` link back to the original episodic chunk.
 4. **You receive** the episodic record IDs + every semantic record
    ID + per-aperture yields + token usage. Total round-trip on a
-   typical paragraph is 30-90 seconds.
+   typical paragraph is 60-180 seconds.
 
 ### What gets extracted
 
@@ -588,7 +588,7 @@ wrong. If the LLM is unconfigured, you get a warning + 0 facts.
   |---|---|
   | HTTP 400 | Validate request: `text` is required + non-empty. |
   | HTTP 500 + warnings | LLM call failed. The chunk was saved. Retry later or call `/reconsolidate/enqueue` to re-extract. |
-  | Timeout | `/memorize?mode=exhaustive` takes 30-90 s. Use `mode=single` for low-latency paths. |
+  | Timeout | `/memorize?mode=exhaustive` takes 60-180 s on z-ai/glm-5. Cloudflare's free-tier proxy times out at 100 s — call the host on its private IP for long jobs, or use `mode=single`. |
   | Recall returns 0 rows for a query you just memorized | The substrate's `/recall` is real-time; if no rows appear, check `holder`, `session_id`, and your free-text filter. |
   | Recall returns `action_allowed=false` everywhere | The default policy is fail-closed for most actions. Use `read_metadata` (always allowed) to see what's there, or request an attestation for the action you need. |
 
@@ -719,7 +719,7 @@ last week?"
     `/reconsolidate/enqueue` if you want a specific record looked
     at sooner.
   - **Don't rely on `mode: "exhaustive"` for sub-second latency.**
-    Five LLM calls in parallel still take 30-90 s. Use `single` for
+    Five LLM calls in parallel still take 60-180 s. Use `single` for
     real-time paths.
   - **Don't bypass `/memorize` to write structured facts unless you
     really mean it.** If you call `/ingest/semantic-claim` directly

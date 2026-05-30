@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
+use axum::extract::Query;
 use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
+use chrono::Utc;
 use donto_memory_core::overlays;
 use serde::Deserialize;
 use serde_json::json;
@@ -17,14 +19,24 @@ pub struct EnqueueReq {
     pub priority: f64,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct QueueQuery {
+    #[serde(default = "default_limit")]
+    pub limit: i64,
+}
+
 fn default_reason() -> String {
     "explicit".to_string()
+}
+fn default_limit() -> i64 {
+    100
 }
 
 pub async fn enqueue(
     State(s): State<Arc<AppState>>,
     Json(req): Json<EnqueueReq>,
 ) -> impl IntoResponse {
+    let requested_at = Utc::now();
     match overlays::get_record(&s.pool, req.record_id).await {
         Ok(Some(_)) => match overlays::enqueue_reconsolidation(
             &s.pool,
@@ -41,6 +53,8 @@ pub async fn enqueue(
                 "queue_id": qid,
                 "record_id": req.record_id,
                 "reason": req.reason,
+                "priority": req.priority,
+                "available_at": requested_at,
             }))
             .into_response(),
             Err(e) => (
@@ -62,7 +76,10 @@ pub async fn enqueue(
     }
 }
 
-pub async fn queue(State(s): State<Arc<AppState>>) -> impl IntoResponse {
+pub async fn queue(
+    State(s): State<Arc<AppState>>,
+    Query(q): Query<QueueQuery>,
+) -> impl IntoResponse {
     let conn = match s.pool.get().await {
         Ok(c) => c,
         Err(e) => {
@@ -73,14 +90,15 @@ pub async fn queue(State(s): State<Arc<AppState>>) -> impl IntoResponse {
                 .into_response();
         }
     };
+    let limit = q.limit.clamp(1, 1000);
     let rows = conn
         .query(
             "select queue_id, record_id, reason, priority, available_at, \
                     claimed_at, claimed_by, completed_at \
                from donto_x_memory_reconsolidation_queue \
               where completed_at is null \
-              order by priority desc, available_at asc limit 100",
-            &[],
+              order by priority desc, available_at asc limit $1",
+            &[&limit],
         )
         .await;
     match rows {
@@ -100,7 +118,7 @@ pub async fn queue(State(s): State<Arc<AppState>>) -> impl IntoResponse {
                     })
                 })
                 .collect();
-            Json(json!({"items": items})).into_response()
+            Json(json!({"count": items.len(), "items": items})).into_response()
         }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
