@@ -90,12 +90,35 @@ fn default_true() -> bool {
     true
 }
 
+/// Replace each `images[i]` entry with a short preview so audit-log
+/// rows don't carry 50+ KB of base64 per call. Preserves http URLs
+/// (they're tiny) and truncates `data:` URLs to mime + first 64 chars.
+fn redact_images(mut req: Value) -> Value {
+    if let Some(images) = req.get_mut("images").and_then(|v| v.as_array_mut()) {
+        for img in images.iter_mut() {
+            if let Some(s) = img.as_str() {
+                if s.starts_with("data:") {
+                    // Keep "data:<mime>;base64,<first 64 chars>…(<n bytes>)"
+                    let prefix: String = s.chars().take(96).collect();
+                    *img = Value::String(format!("{prefix}… ({} bytes total)", s.len()));
+                }
+                // http(s) URLs stay verbatim — they're small.
+            }
+        }
+    }
+    req
+}
+
 pub async fn memorize(
     State(s): State<Arc<AppState>>,
     JsonReq(req): JsonReq<MemorizeReq>,
 ) -> impl IntoResponse {
     let started = std::time::Instant::now();
-    let request_json = serde_json::to_value(&req).unwrap_or_else(|_| json!({}));
+    // Redact image bytes before audit-logging: a single base64 PNG
+    // can be 50+ KB per memorize call, and at the 220 KB/day growth
+    // rate this would fill the job log table fast. Keep only a
+    // truncated preview + a count.
+    let request_json = redact_images(serde_json::to_value(&req).unwrap_or_else(|_| json!({})));
     let (status_code, resp_json) = match memorize_one(&s, &req).await {
         Ok(resp) => (200u16, serde_json::to_value(&resp).unwrap_or_else(|_| json!({}))),
         Err(MemorizeError::BadInput(msg)) => (400u16, json!({"error": msg})),
@@ -136,7 +159,13 @@ pub async fn memorize_batch(
     JsonReq(req): JsonReq<MemorizeBatchReq>,
 ) -> impl IntoResponse {
     let started = std::time::Instant::now();
-    let request_json = serde_json::to_value(&req).unwrap_or_else(|_| json!({}));
+    // Walk the items array and redact each item's images field.
+    let mut request_json = serde_json::to_value(&req).unwrap_or_else(|_| json!({}));
+    if let Some(items) = request_json.get_mut("items").and_then(|v| v.as_array_mut()) {
+        for it in items.iter_mut() {
+            *it = redact_images(std::mem::replace(it, Value::Null));
+        }
+    }
 
     if req.items.is_empty() {
         let resp = json!({"error": "items[] is empty"});
