@@ -51,6 +51,7 @@ async fn build_state() -> Option<(donto_memory::api::AppState, Settings)> {
         settings: s.clone(),
         substrate,
         pool,
+        async_memorize_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
     };
     Some((st, s))
 }
