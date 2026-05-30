@@ -169,22 +169,48 @@ pub fn document() -> Value {
                             "application/json": {
                                 "schema": {
                                     "type": "object",
-                                    "required": ["holder", "text"],
+                                    "required": ["holder"],
                                     "properties": {
-                                        "holder":     { "type": "string" },
-                                        "session_id": { "type": "string", "nullable": true },
-                                        "text":       { "type": "string" },
-                                        "modality":   { "type": "string", "default": "model_output" },
+                                        "holder":     { "type": "string", "description": "Agent IRI (e.g. agent:my-bot)." },
+                                        "session_id": { "type": "string", "nullable": true, "description": "Optional scope. Conventional shapes: `discord:user:<id>`, `conversation:<id>`. Recall can filter on this." },
+                                        "text":       { "type": "string", "description": "The memory to store. Required unless `images` is non-empty (in which case OCR populates text)." },
+                                        "modality":   { "type": "string", "default": "model_output", "description": "How this chunk came to exist. Values: model_output | descriptive | oral_history | community_protocol | inferred | reconstructed | elicited | experimental_result | clinical_observation." },
                                         "extract":    { "type": "boolean", "default": true,
-                                                         "description": "Set false to skip LLM extraction and store episodic only." }
+                                                         "description": "Set false to skip LLM extraction and store episodic only." },
+                                        "mode":       { "type": "string", "enum": ["single", "exhaustive", "multi", "apertures"],
+                                                         "description": "Extraction mode. `single` = one LLM call (~30-100 facts, ~30-100s). `exhaustive` = five parallel apertures (~80-250 facts, ~60-180s, ~5× tokens). Defaults to DONTO_MEMORY_EXTRACT_MODE on the runtime." },
+                                        "images":     { "type": "array",
+                                                         "items": { "type": "string" },
+                                                         "description": "Optional images. Each entry is an http(s) URL the LLM provider can fetch OR a `data:image/...;base64,…` data URL. When non-empty: (1) the extractor switches to OpenAI multimodal message format and uses `DONTO_MEMORY_LLM_VISION_MODEL` (currently `openai/gpt-4o-mini` in production), (2) an OCR pre-pass transcribes any visible text and prepends it to the episodic chunk as `[OCR text from image #N]\\n<transcript>` blocks — visible labels in screenshots/signs/captions become searchable via /recall query=. Disable OCR via DONTO_MEMORY_OCR_ENABLED=false." }
                                     }
                                 },
                                 "examples": {
                                     "basic": {
+                                        "summary": "Plain text memorize",
                                         "value": {
-                                            "holder": "agent:ajax",
-                                            "session_id": "s-2026-05-28",
-                                            "text": "I met Annie Davis at the Cooktown Festival in 1979. She told me her father had been a beche-de-mer fisherman."
+                                            "holder": "agent:my-bot",
+                                            "session_id": "discord:user:12345",
+                                            "text": "I met Annie Davis at the Cooktown Festival in 1979."
+                                        }
+                                    },
+                                    "image_url": {
+                                        "summary": "Image-only with OCR + extraction",
+                                        "value": {
+                                            "holder": "agent:my-bot",
+                                            "session_id": "screenshots",
+                                            "text": "",
+                                            "mode": "single",
+                                            "images": ["https://picsum.photos/seed/example/512/512"]
+                                        }
+                                    },
+                                    "data_url": {
+                                        "summary": "Base64 inline image",
+                                        "value": {
+                                            "holder": "agent:my-bot",
+                                            "session_id": "uploads",
+                                            "text": "Screenshot from a chat",
+                                            "mode": "single",
+                                            "images": ["data:image/png;base64,iVBORw0K…"]
                                         }
                                     }
                                 }
