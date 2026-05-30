@@ -16,7 +16,6 @@ pub async fn ingest(
     Json(input): Json<Value>,
 ) -> impl IntoResponse {
     let started = std::time::Instant::now();
-    let endpoint = format!("POST /ingest/{}", module_iri);
     let holder = input.get("holder").and_then(|v| v.as_str()).map(|s| s.to_string());
     let session_id = input
         .get("session_id")
@@ -30,6 +29,15 @@ pub async fn ingest(
         "semantic-claim" => "mem:module/semantic-claim".to_string(),
         "preference" => "mem:module/preference".to_string(),
         other => other.to_string(),
+    };
+    // Audit-log under the canonical name so `/ingest/episodic` and
+    // `/ingest/mem:module/episodic` group cleanly in /jobs filters.
+    // Unknown modules still log under the raw module_iri so probes
+    // and typos remain visible.
+    let endpoint = if reg.get(&canonical).is_some() {
+        format!("POST /ingest/{}", canonical)
+    } else {
+        format!("POST /ingest/{}", module_iri)
     };
 
     let (status_code, resp_json): (u16, Value) = match reg.get(&canonical) {
