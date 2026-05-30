@@ -271,6 +271,7 @@
         <li><a href="#substrate">Substrate handshake</a></li>
         <li><a href="#cookbook">Cookbook</a></li>
         <li><a href="#blob">Source documents (<code>donto blob</code>)</a></li>
+        <li><a href="#ops">Operator surfaces</a></li>
         <li><a href="#dontdo">Things NOT to do</a></li>
       </ol>
     </nav>
@@ -776,7 +777,44 @@ curl -X POST https://memories.apexpots.com/memorize \
     </p>
 
     <!-- =================================================================== -->
-    <h2 id="dontdo"><span class="num">17</span>Things NOT to do</h2>
+    <!-- =================================================================== -->
+    <h2 id="ops"><span class="num">17</span>Operator surfaces (<code>/jobs</code>, <code>/explore</code>)</h2>
+    <p>
+      <code>/jobs/*</code> and <code>/explore/*</code> expose every
+      memorized text + recall query body. They're observability tools
+      for the operator, not public agent surfaces. On any deployment
+      reachable from the public internet, set
+      <code>DONTO_MEMORY_OPS_TOKEN=&lt;random-token&gt;</code> on the
+      runtime — that gates those 10 routes behind a bearer token:
+    </p>
+    <pre><code># anonymous → 401
+curl https://memories.apexpots.com/jobs                # → 401
+
+# with the token via Authorization header
+curl -H 'Authorization: Bearer &lt;token&gt;' \
+  https://memories.apexpots.com/jobs                   # → 200
+
+# or via query string (handy for browser bookmarks)
+curl 'https://memories.apexpots.com/jobs?token=&lt;token&gt;'  # → 200</code></pre>
+    <p>
+      When the env var is unset the routes are open (preserves the
+      local-dev workflow). When set, the comparison is constant-time
+      so the token can't be probed for length or prefix. The agent
+      contract (<code>/</code>, <code>/agent.md</code>,
+      <code>/llms.txt</code>, <code>/openapi.json</code>,
+      <code>/docs</code>, <code>/memorize</code>, <code>/recall</code>,
+      <code>/ingest/*</code>, <code>/modules</code>,
+      <code>/version</code>, <code>/health</code>) is
+      <strong>never</strong> gated.
+    </p>
+    <p>
+      <code>GET /api</code> returns a categorized endpoint summary
+      and an <code>ops_token_required</code> boolean so monitoring
+      can detect whether the gate is active.
+    </p>
+
+    <!-- =================================================================== -->
+    <h2 id="dontdo"><span class="num">18</span>Things NOT to do</h2>
     <ul>
       <li><strong>Don't try to delete memories.</strong> Donto is
         append-only. Tombstoning (true deletion) requires an

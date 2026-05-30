@@ -519,6 +519,32 @@ Don't expect it to compress wall-time on exhaustive mode.
 
 ---
 
+## Production hardening — set the ops token
+
+`/jobs/*` and `/explore/*` on the donto-memory instance expose every
+memorized text + recall query body — they're operator tools, not
+agent surfaces. On any deployment reachable from the public
+internet, the operator should set
+`DONTO_MEMORY_OPS_TOKEN=<random-token>` so anonymous visitors get
+401 on those routes.
+
+That doesn't affect any agent code: `/memorize`, `/recall`,
+`/ingest/*`, `/agent.md`, `/openapi.json` are never gated. The
+bot's HTTP calls keep working unchanged. The only place that breaks
+is anyone who was reading the operator dashboard without a token —
+they need to pass `Authorization: Bearer <token>` or `?token=<token>`.
+
+You can detect whether a deployment has the gate active with one
+call:
+
+```ts
+const { ops_token_required } =
+  await fetch(`${MEMORIES}/api`).then(r => r.json());
+if (ops_token_required) {
+  console.warn('ops surfaces locked — supply token to access /jobs and /explore');
+}
+```
+
 ## Tier 4 — Skip for now
 
 - **Identity lenses** (`lens_name: 'likely_identity_v1'`) —

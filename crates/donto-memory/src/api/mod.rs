@@ -157,19 +157,47 @@ async fn integration_patterns_md(req: Request) -> Response {
 
 /// JSON summary at `/api` (the old `/` payload, kept for programmatic
 /// callers that hit the root expecting JSON).
-async fn api_summary() -> axum::Json<serde_json::Value> {
+async fn api_summary(
+    State(state): State<Arc<AppState>>,
+) -> axum::Json<serde_json::Value> {
     axum::Json(serde_json::json!({
         "service": "donto-memory",
         "version": env!("CARGO_PKG_VERSION"),
         "substrate_contract_floor": donto_memory_core::SUBSTRATE_CONTRACT_FLOOR,
-        "endpoints": [
-            "GET /health", "GET /version", "GET /substrate",
-            "GET /modules",
-            "POST /ingest/:module_iri",
-            "POST /recall",
-            "POST /reconsolidate/enqueue",
-            "GET /reconsolidate/queue",
-            "GET /openapi.json", "GET /docs"
-        ],
+        "endpoints": {
+            "agent_contract": [
+                "GET /health",
+                "GET /version",
+                "GET /substrate",
+                "GET /modules",
+                "POST /ingest/:module_iri",
+                "POST /memorize",
+                "POST /memorize/batch",
+                "POST /recall",
+                "POST /reconsolidate/enqueue",
+                "GET /reconsolidate/queue"
+            ],
+            "documentation": [
+                "GET /",
+                "GET /openapi.json",
+                "GET /docs",
+                "GET /agent.md",
+                "GET /llms.txt",
+                "GET /integration-patterns.md"
+            ],
+            "operator": [
+                "GET /jobs",
+                "GET /jobs/list.json",
+                "GET /jobs/:id",
+                "GET /jobs/:id/raw",
+                "GET /explore",
+                "GET /explore/stats.json",
+                "GET /explore/holders.json",
+                "GET /explore/sessions.json",
+                "GET /explore/records.json",
+                "GET /explore/facts.json"
+            ]
+        },
+        "ops_token_required": state.settings.ops_token.is_some(),
     }))
 }

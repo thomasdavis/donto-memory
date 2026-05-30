@@ -41,7 +41,8 @@ pub fn document() -> Value {
             { "name": "modules",    "description": "Memory module discovery." },
             { "name": "ingest",     "description": "Write a unit of memory into a module." },
             { "name": "recall",     "description": "Read a Memory Evidence Bundle." },
-            { "name": "reconsolidate", "description": "Sleep-path queue management." }
+            { "name": "reconsolidate", "description": "Sleep-path queue management." },
+            { "name": "operator",   "description": "Observability surfaces (/jobs, /explore). Gated by the optional ops bearer token — see the `opsBearer` security scheme. Open when the runtime has no `DONTO_MEMORY_OPS_TOKEN` set." }
         ],
         "paths": {
             "/": {
@@ -367,8 +368,9 @@ pub fn document() -> Value {
             },
             "/jobs": {
                 "get": {
-                    "tags": ["system"],
-                    "summary": "HTML observability page (job history)",
+                    "tags": ["operator"],
+                    "security": [{"opsBearer": []}],
+                    "summary": "HTML observability page (job history) — OPERATOR",
                     "description": "Browseable list of every /memorize, /recall, and /ingest call with full request/response bodies. Filter via the `endpoint` and `holder` query parameters.",
                     "parameters": [
                         { "name": "endpoint", "in": "query", "schema": {"type": "string"}, "description": "Substring filter on the endpoint label." },
@@ -380,8 +382,9 @@ pub fn document() -> Value {
             },
             "/jobs/list.json": {
                 "get": {
-                    "tags": ["system"],
-                    "summary": "JSON list view of recent jobs",
+                    "tags": ["operator"],
+                    "security": [{"opsBearer": []}],
+                    "summary": "JSON list view of recent jobs — OPERATOR",
                     "description": "Programmatic equivalent of GET /jobs. Same query params; returns `{count, jobs[]}`.",
                     "parameters": [
                         { "name": "endpoint", "in": "query", "schema": {"type": "string"} },
@@ -408,8 +411,9 @@ pub fn document() -> Value {
             },
             "/jobs/{id}": {
                 "get": {
-                    "tags": ["system"],
-                    "summary": "HTML detail for a single job",
+                    "tags": ["operator"],
+                    "security": [{"opsBearer": []}],
+                    "summary": "HTML detail for a single job — OPERATOR",
                     "description": "Per-job page showing the full request/response. For /memorize jobs, also renders every extracted fact as a sortable table.",
                     "parameters": [
                         { "name": "id", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"} }
@@ -423,8 +427,9 @@ pub fn document() -> Value {
             },
             "/jobs/{id}/raw": {
                 "get": {
-                    "tags": ["system"],
-                    "summary": "Raw JSON for a single job",
+                    "tags": ["operator"],
+                    "security": [{"opsBearer": []}],
+                    "summary": "Raw JSON for a single job — OPERATOR",
                     "parameters": [
                         { "name": "id", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"} }
                     ],
@@ -443,6 +448,13 @@ pub fn document() -> Value {
             }
         },
         "components": {
+            "securitySchemes": {
+                "opsBearer": {
+                    "type": "http",
+                    "scheme": "bearer",
+                    "description": "Operator-only bearer token (set on the runtime via DONTO_MEMORY_OPS_TOKEN). When the env var is unset on the deployment, the gate is a pass-through and these routes are open. Pass via `Authorization: Bearer <token>` or the `?token=<token>` query parameter."
+                }
+            },
             "schemas": {
                 "IngestInput": {
                     "type": "object",
