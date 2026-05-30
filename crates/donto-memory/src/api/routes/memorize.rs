@@ -197,11 +197,21 @@ pub async fn memorize(
             // stack up parallel LLM calls.
             let _guard = s_async.async_memorize_lock.lock().await;
             let task_started = std::time::Instant::now();
-            let (status_code, resp_json) = match memorize_one(&s_async, &req).await {
+            let (status_code, mut resp_json) = match memorize_one(&s_async, &req).await {
                 Ok(resp) => (200u16, serde_json::to_value(&resp).unwrap_or_else(|_| json!({}))),
                 Err(MemorizeError::BadInput(msg)) => (400u16, json!({"error": msg})),
                 Err(other) => (500u16, json!({"error": other.to_string()})),
             };
+            // Stamp queue_id into the (async)/(async-failed) audit row.
+            // The orphan-recovery SQL in main.rs::mark_orphaned_queued_rows
+            // joins (queued) to (async) via `response->>'queue_id'`. Without
+            // this stamp every completed task looks unmatched on restart,
+            // and the next startup would re-mark already-completed work
+            // as (lost). Already shipped (lost) rows can't be retroactively
+            // un-marked, but new completions land with the right link.
+            if let Some(obj) = resp_json.as_object_mut() {
+                obj.insert("queue_id".into(), json!(queue_id));
+            }
             let elapsed_ms = task_started.elapsed().as_millis() as u64;
             let metrics = if status_code < 400 {
                 job_log::metrics_from_memorize(&resp_json)
