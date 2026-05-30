@@ -109,11 +109,19 @@ unless the user asks "what do you know about me".`;
 }
 ```
 
-**Latency budget.** A recall typically completes in <100ms.
-Running it on the response hot-path is fine. If you want extra
-safety, wrap in a `Promise.race` against a 250ms timer and fall
-through to the base prompt on timeout — losing context is better
-than losing the turn.
+**Latency budget.** Recall scales with session size:
+
+  - **Per-user `session_id`** (Tier 2.6): 30–80 ms. Use this on the
+    response hot path.
+  - **Per-channel `session_id`**: 3–5 s on a busy channel with
+    hundreds of memories. The substrate's policy gate is the
+    bottleneck; donto-memory's composer adds only ~30–100 ms.
+
+If you must use per-channel, wrap recall in a `Promise.race`
+against a 500ms timer and fall through to the base prompt on
+timeout — losing context is better than losing the turn. The per-
+user pattern keeps the hot path fast; per-channel is fine for
+"background warming" out of band.
 
 **Action choice.** Use `read_content` for actually conditioning
 the model's output. Use `read_metadata` if you only need to count

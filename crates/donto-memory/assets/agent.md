@@ -650,8 +650,30 @@ LLM token cost dominates `/memorize` cost.
   - `mode: "exhaustive"` — 5 parallel LLM calls. ~1.8 K prompt + ~15-25 K
     completion total = **~$0.04-$0.07** per memorize.
 
-Recall has no LLM cost. Postgres + substrate side: a typical recall
-is <100 ms on the standard hardware.
+Recall has no LLM cost. Latency depends almost entirely on the
+substrate-side `/recall` pipeline:
+
+  - **Small / per-user holders** (a few dozen records): 30–80 ms.
+    This is the omega-bot per-user `session_id: discord:user:<id>`
+    pattern — recall feels instant.
+  - **Big session contexts** (hundreds-to-thousands of records per
+    session, e.g. a channel-scoped session for an active Discord
+    server): **3–5 s**. The substrate's policy gate + identity-lens
+    pipeline scans every candidate row in the context, so latency
+    scales with session size.
+
+The donto-memory hot-path composer adds ~30–100 ms on top of
+whatever the substrate returns (module fan-out, RRF fusion,
+per-row access bookkeeping in parallel). So `/recall` latency is
+dominated by which substrate-side path your session triggers.
+
+**Practical implication.** For the response hot path of a
+conversational agent, prefer **per-user `session_id`** (Tier 2.6 in
+the integration spec) over per-channel. That keeps each user's
+session small and recall fast. If you must use a per-channel
+session, wrap the recall in a `Promise.race` against a 500 ms
+timer and fall through to the base prompt — losing context is
+better than losing the turn.
 
 If you're processing thousands of memorize calls/day, `single` mode
 is the right default. If you're processing dozens but they're

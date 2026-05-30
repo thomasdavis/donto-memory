@@ -600,7 +600,11 @@ curl -X POST https://memories.apexpots.com/recall \
       <tr><td><code>exhaustive</code></td><td>5 parallel</td><td>~2K + ~15-25K</td><td>$0.04–$0.08</td><td>60–180 s</td></tr>
     </table>
     <p>
-      Recall typically completes in under 100 ms on the standard
+      Recall latency depends on session size: per-user sessions with
+      a few dozen records return in 30–80 ms; big channel-scoped
+      sessions with hundreds-to-thousands of records take 3–5 s
+      because the substrate's policy gate scans every candidate.
+      The hot-path composer adds ~30–100 ms on top. On the standard
       hardware (the substrate side dominates; we add ~10-20 ms of fusion
       + access bookkeeping).
     </p>
