@@ -48,6 +48,7 @@ pub fn router(state: AppState) -> Router {
         .route("/openapi.json", get(openapi_doc))
         .route("/docs", get(swagger_ui))
         .route("/agent.md", get(agent_md))
+        .route("/integration-patterns.md", get(integration_patterns_md))
         .route("/llms.txt", get(llms_txt))
         .route("/jobs", get(routes::jobs::list_html))
         .route("/jobs/list.json", get(routes::jobs::list_json))
@@ -93,6 +94,19 @@ async fn llms_txt() -> Response {
     (
         [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
         docs::AGENT_MD,
+    )
+        .into_response()
+}
+
+/// Concrete integration-patterns spec aimed at the dev (or AI agent)
+/// wiring an existing conversational backend into donto-memory.
+/// Covers conversation-context shaping, recall-on-prompt, mode
+/// policy, preference shortcuts, source registration for
+/// tombstoning, and ship order.
+async fn integration_patterns_md() -> Response {
+    (
+        [(header::CONTENT_TYPE, "text/markdown; charset=utf-8")],
+        docs::INTEGRATION_PATTERNS_MD,
     )
         .into_response()
 }

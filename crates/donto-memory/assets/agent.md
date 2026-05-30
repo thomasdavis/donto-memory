@@ -23,6 +23,14 @@ That's it. Everything else is optional polish (manual structured
 ingest, identity lenses, bitemporal time-travel, policy gating,
 reconsolidation queue inspection).
 
+**If you are integrating an existing conversational backend** (a
+chat bot, a Discord/Slack agent, a web assistant) into
+donto-memory, jump to [`/integration-patterns.md`](/integration-patterns.md)
+after reading §0–§4 here. It's a concrete, code-first ship guide
+covering context-shaping, recall on the prompt path, mode policy,
+preference shortcuts, source registration, and a recommended
+ship order.
+
 ### The 30-second quick-start
 
 ```bash
@@ -885,6 +893,11 @@ that document will fail closed.
 
 ## 14. Resources
 
+  - **Concrete integration patterns** (recall on the prompt path,
+    conversation context shaping, mode policy, preference shortcuts,
+    source registration, ship order): [`/integration-patterns.md`](/integration-patterns.md).
+    Read this if you are wiring an existing conversational backend
+    (Discord/Slack/web bot) into donto-memory.
   - **OpenAPI 3.1 spec:** [`/openapi.json`](/openapi.json)
   - **Swagger UI:** [`/docs`](/docs)
   - **This guide as plain text:** [`/llms.txt`](/llms.txt)

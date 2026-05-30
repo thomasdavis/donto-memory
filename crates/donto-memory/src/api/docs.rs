@@ -4,3 +4,5 @@
 pub const HOMEPAGE: &str = include_str!("../../assets/index.html");
 pub const SWAGGER_HTML: &str = include_str!("../../assets/docs.html");
 pub const AGENT_MD: &str = include_str!("../../assets/agent.md");
+pub const INTEGRATION_PATTERNS_MD: &str =
+    include_str!("../../assets/integration-patterns.md");
