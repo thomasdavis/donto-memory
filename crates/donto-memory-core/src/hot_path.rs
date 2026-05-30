@@ -73,7 +73,14 @@ pub async fn compose_bundle(
     let limit = query.limit.max(0) as usize;
     fused.truncate(limit);
 
-    // 4. Side effects: access + reconsolidation enqueue.
+    // 4. Side effects: access + state bump + reconsolidation enqueue.
+    //
+    // Previously this ran 4 sequential round-trips PER row
+    // (find_record → record_access → bump_state → enqueue), making
+    // a 10-row recall 40 sequential queries. We now fan out across
+    // rows: each row's chain stays sequential (record_access needs
+    // the record_id from find_record), but rows run concurrently
+    // via futures::join_all. 10 rows × pool of 32 = comfortable.
     if !fused.is_empty() {
         let q_hash = overlays::hash_query(
             query
@@ -83,50 +90,61 @@ pub async fn compose_bundle(
                 .or(query.predicate.as_deref())
                 .unwrap_or(""),
         );
-        for row in fused.iter_mut() {
-            match overlays::find_record_by_statement(pool, row.statement_id).await {
-                Ok(Some(rec)) => {
-                    row.record_iri = Some(rec.record_iri.clone());
-                    if let Err(e) = overlays::record_access(
+
+        let futures = fused.iter().enumerate().map(|(idx, row)| {
+            let q_hash = q_hash.clone();
+            let holder = query.holder.clone();
+            let stmt_id = row.statement_id;
+            let rank = row.rank;
+            let score = row.score;
+            async move {
+                let rec = match overlays::find_record_by_statement(pool, stmt_id).await {
+                    Ok(Some(r)) => r,
+                    Ok(None) => return (idx, None),
+                    Err(e) => {
+                        warn!(error = %e, "find_record_by_statement failed");
+                        return (idx, None);
+                    }
+                };
+                if let Err(e) = overlays::record_access(
+                    pool,
+                    rec.record_id,
+                    &holder,
+                    AccessKind::Retrieved,
+                    Some(&q_hash),
+                    rank,
+                    score,
+                )
+                .await
+                {
+                    warn!(record = %rec.record_id, error = %e, "record_access failed");
+                }
+                if let Err(e) = overlays::bump_state(pool, rec.record_id, 0.1).await {
+                    warn!(record = %rec.record_id, error = %e, "bump_state failed");
+                }
+                if enqueue_reconsolidation {
+                    let payload = json!({});
+                    if let Err(e) = overlays::enqueue_reconsolidation(
                         pool,
                         rec.record_id,
-                        &query.holder,
-                        AccessKind::Retrieved,
-                        Some(&q_hash),
-                        row.rank,
-                        row.score,
+                        "recall",
+                        score.unwrap_or(0.0),
+                        None,
+                        &payload,
+                        coalesce_window_seconds,
                     )
                     .await
                     {
-                        warn!(record = %rec.record_id, error = %e, "record_access failed");
-                    }
-                    if let Err(e) = overlays::bump_state(pool, rec.record_id, 0.1).await {
-                        warn!(record = %rec.record_id, error = %e, "bump_state failed");
-                    }
-                    if enqueue_reconsolidation {
-                        let payload = json!({});
-                        if let Err(e) = overlays::enqueue_reconsolidation(
-                            pool,
-                            rec.record_id,
-                            "recall",
-                            row.score.unwrap_or(0.0),
-                            None,
-                            &payload,
-                            coalesce_window_seconds,
-                        )
-                        .await
-                        {
-                            warn!(record = %rec.record_id, error = %e, "enqueue_reconsolidation failed");
-                        }
+                        warn!(record = %rec.record_id, error = %e, "enqueue_reconsolidation failed");
                     }
                 }
-                Ok(None) => {
-                    // Statement came from outside donto-memory; surface it
-                    // but skip the memory-state bookkeeping.
-                }
-                Err(e) => {
-                    warn!(error = %e, "find_record_by_statement failed");
-                }
+                (idx, Some(rec.record_iri))
+            }
+        });
+        let results = join_all(futures).await;
+        for (idx, record_iri) in results {
+            if let Some(iri) = record_iri {
+                fused[idx].record_iri = Some(iri);
             }
         }
     }
