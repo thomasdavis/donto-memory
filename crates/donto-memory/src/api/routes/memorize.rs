@@ -526,7 +526,19 @@ async fn memorize_one(
                         let ingest_started = std::time::Instant::now();
                         let mut last_log = std::time::Instant::now();
                         let mut ingest_errors = 0usize;
+                        let mut ingest_skipped = 0usize;
                         for (i, fact) in result.facts.iter().enumerate() {
+                            // Skip facts the LLM emitted without an object
+                            // (or with both object_iri and object_lit set).
+                            // Semantic-claim's "exactly one" check would
+                            // reject them anyway — filtering here keeps
+                            // them out of the per-fact warn flood and out
+                            // of the error count, since the failure mode
+                            // is bad LLM output, not a substrate bug.
+                            if !fact.is_ingestable() {
+                                ingest_skipped += 1;
+                                continue;
+                            }
                             match ingest_fact(s, &semantic, fact, req, &episodic_record.record_iri)
                                 .await
                             {
@@ -564,12 +576,18 @@ async fn memorize_one(
                                 last_log = std::time::Instant::now();
                             }
                         }
+                        if ingest_skipped > 0 {
+                            warnings.push(format!(
+                                "{ingest_skipped} fact(s) skipped (LLM emitted without exactly one object)"
+                            ));
+                        }
                         tracing::info!(
                             holder = req.holder.as_str(),
                             session_id = req.session_id.as_deref().unwrap_or("-"),
                             total = result.facts.len(),
                             ingested = facts_ingested,
                             errors = ingest_errors,
+                            skipped = ingest_skipped,
                             elapsed_ms = ingest_started.elapsed().as_millis() as u64,
                             "ingest complete"
                         );

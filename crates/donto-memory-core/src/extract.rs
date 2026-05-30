@@ -167,6 +167,15 @@ impl ExtractedFact {
         }
         hex::encode(h.finalize())
     }
+
+    /// True when this fact has exactly one of (object_iri, object_lit) set —
+    /// the substrate's semantic-claim module requires this. LLMs occasionally
+    /// emit facts with neither (forgetting the object) or both (over-specified);
+    /// those facts are unusable and should be filtered out before ingest
+    /// rather than driving a per-fact 400/422.
+    pub fn is_ingestable(&self) -> bool {
+        self.object_iri.is_some() ^ self.object_lit.is_some()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1282,6 +1291,48 @@ mod tests {
         let lit = f.object_lit.expect("number must be wrapped");
         assert_eq!(lit["v"], 42);
         assert_eq!(lit["dt"], "xsd:integer");
+    }
+
+    #[test]
+    fn is_ingestable_neither_object_set() {
+        let f = ExtractedFact {
+            subject: "ex:s".into(), predicate: "ex:p".into(),
+            object_iri: None, object_lit: None,
+            confidence: None, modality: None, hypothesis_only: None,
+            aperture: None, notes: None,
+        };
+        assert!(!f.is_ingestable(), "fact with no object must be filtered out");
+    }
+
+    #[test]
+    fn is_ingestable_both_objects_set() {
+        let f = ExtractedFact {
+            subject: "ex:s".into(), predicate: "ex:p".into(),
+            object_iri: Some("ex:x".into()),
+            object_lit: Some(serde_json::json!({"v":"y","dt":"xsd:string"})),
+            confidence: None, modality: None, hypothesis_only: None,
+            aperture: None, notes: None,
+        };
+        assert!(!f.is_ingestable(), "fact with both objects set must be filtered out");
+    }
+
+    #[test]
+    fn is_ingestable_one_object_set() {
+        let iri = ExtractedFact {
+            subject: "ex:s".into(), predicate: "ex:p".into(),
+            object_iri: Some("ex:x".into()), object_lit: None,
+            confidence: None, modality: None, hypothesis_only: None,
+            aperture: None, notes: None,
+        };
+        assert!(iri.is_ingestable());
+        let lit = ExtractedFact {
+            subject: "ex:s".into(), predicate: "ex:p".into(),
+            object_iri: None,
+            object_lit: Some(serde_json::json!({"v":"y","dt":"xsd:string"})),
+            confidence: None, modality: None, hypothesis_only: None,
+            aperture: None, notes: None,
+        };
+        assert!(lit.is_ingestable());
     }
 
     #[test]
