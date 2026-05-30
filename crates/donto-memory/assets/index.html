@@ -264,6 +264,7 @@
         <li><a href="#architecture">Architecture</a></li>
         <li><a href="#substrate">Substrate handshake</a></li>
         <li><a href="#cookbook">Cookbook</a></li>
+        <li><a href="#blob">Source documents (<code>donto blob</code>)</a></li>
         <li><a href="#dontdo">Things NOT to do</a></li>
       </ol>
     </nav>
@@ -700,7 +701,53 @@ const prefs = await fetch("/recall", { method: "POST", body: JSON.stringify({
 // (Mrs Watson, Mary Watson, etc.) under the `likely` identity lens.</code></pre>
 
     <!-- =================================================================== -->
-    <h2 id="dontdo"><span class="num">16</span>Things NOT to do</h2>
+    <!-- =================================================================== -->
+    <h2 id="blob"><span class="num">16</span>Source documents (<code>donto blob</code>)</h2>
+    <p>
+      <code>/memorize</code> stores your text as a <code>xsd:string</code>
+      literal inside an <code>mem:episodic/chunk</code> statement —
+      fine for short utterances. For anything you might later want
+      to <strong>tombstone</strong>, share verbatim, or re-version,
+      register a <strong>source document</strong> on the substrate
+      first. The substrate already holds ~50,000 content-addressed
+      blobs / 6 GB; your messages join that pool.
+    </p>
+    <p>The two-step substrate flow before calling <code>/memorize</code>:</p>
+    <pre><code># 1. Register a source + policy on the substrate.
+curl -X POST $DONTOSRV/sources/register \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "iri":         "doc:my-bot/discord-message/123",
+    "source_kind": "agent-message",
+    "policy_iri":  "policy:user-conversation",
+    "media_type":  "text/markdown"
+  }'
+# → { "document_id": "<uuid>", "iri": "doc:my-bot/...", ... }
+
+# 2. Attach the body. SHA-256 dedup happens here.
+curl -X POST $DONTOSRV/documents/revision \
+  -H 'Content-Type: application/json' \
+  -d '{ "document_id": "<uuid>", "body": "the raw message text…" }'
+
+# 3. Memorize, anchored to the document IRI.
+curl -X POST https://memories.apexpots.com/memorize \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "holder":            "agent:my-bot",
+    "text":              "the raw message text…",
+    "source_record_iri": "doc:my-bot/discord-message/123"
+  }'</code></pre>
+    <p>
+      Bulk files (PDFs, transcripts, archives) are simpler via the
+      CLI: <code>donto blob upload &lt;path&gt;</code> or
+      <code>donto blob sync &lt;dir&gt;</code> for a recursive walk.
+      See the <a href="/agent.md#13-storing-source-documents-alongside-memories-donto-blob">agent guide §13</a>
+      for the full pattern, policy IRIs, and when to skip this layer
+      entirely.
+    </p>
+
+    <!-- =================================================================== -->
+    <h2 id="dontdo"><span class="num">17</span>Things NOT to do</h2>
     <ul>
       <li><strong>Don't try to delete memories.</strong> Donto is
         append-only. Tombstoning (true deletion) requires an

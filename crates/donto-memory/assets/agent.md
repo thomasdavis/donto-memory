@@ -729,7 +729,161 @@ last week?"
 
 ---
 
-## 13. Resources
+## 13. Storing source documents alongside memories (`donto blob`)
+
+The donto substrate has a content-addressed blob store
+(`donto_blob`) and a document-with-revisions layer
+(`donto_document` / `donto_document_revision`) sitting underneath
+the statement table. donto-memory's `/memorize` does **not** use
+either by default — it stores your text as a `xsd:string` literal
+inside an `mem:episodic/chunk` statement. That works for short
+messages, but it skips four things you usually want for **the raw
+message itself**:
+
+  1. **Content-addressing** — identical messages dedupe to one
+     SHA-256-keyed blob. Today the substrate holds **50,000+ blobs
+     totalling ~6 GB**; your messages join that pool.
+  2. **Policy capsules** — a document is governed by a named policy
+     (`policy:user-conversation`, `policy:agent-internal`, etc.).
+     Revoking access to all messages under one policy is a single
+     attestation flip; revoking access to text-inside-statements
+     means walking every `donto_statement`.
+  3. **Revision history** — corrections, edits, redactions of the
+     raw message land as new revisions instead of mutating the
+     original.
+  4. **Tombstones** — `donto blob tombstone` is the only way to
+     drop a blob's bytes from disk while preserving the
+     fact-of-deletion (who, when, under what attestation, why). If
+     you only `/memorize`, you cannot tombstone.
+
+### When to register a source document
+
+For **most short utterances** (one user turn, one log line, one
+preference), skip this section — `/memorize` alone is correct.
+
+For **anything you might want to tombstone, share verbatim, or
+re-version later** — long-form messages, transcripts, PDFs,
+uploaded files, screenshots, agent system prompts you're storing
+for review — register a document on the substrate **first**, then
+call `/memorize` referencing it.
+
+### The two-step substrate flow
+
+donto-memory does not proxy these endpoints; you call dontosrv
+directly. Substrate base: the same VM as donto-memory, port 7879
+(local). Replace with your substrate's host.
+
+**Step 1 — Register the source + policy.** Substrate base
+`http://localhost:7879` (or your deployment's substrate URL):
+
+```bash
+curl -X POST $DONTOSRV/sources/register \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "iri":         "doc:my-bot/discord-message/1497274794586931220",
+    "source_kind": "agent-message",
+    "policy_iri":  "policy:user-conversation",
+    "media_type":  "text/markdown",
+    "label":       "Discord #donto turn",
+    "source_url":  "https://discord.com/channels/.../1497274794586931220"
+  }'
+```
+
+Returns `{document_id, iri, policy_iri}`. The `policy_iri` MUST
+exist; the substrate fails closed.
+
+**Step 2 — Attach the body as a revision.** This is where the bytes
+become content-addressed:
+
+```bash
+curl -X POST $DONTOSRV/documents/revision \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "document_id":    "<uuid from step 1>",
+    "body":           "ajaxdavis in #donto: a dog fell into river and hunted fish",
+    "parser_version": "raw/v1"
+  }'
+```
+
+Returns `{revision_id}`. The substrate computes the SHA-256, dedupes
+against existing blobs, and writes a `donto_document_revision` row
+linking your document to the (possibly pre-existing) blob.
+
+**Step 3 — Memorize, anchored to the document.** Now call
+donto-memory and point it at the document IRI you just created:
+
+```bash
+curl -X POST https://memories.apexpots.com/memorize \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "holder":     "agent:my-bot",
+    "session_id": "discord:server-id:channel-id",
+    "text":       "ajaxdavis in #donto: a dog fell into river and hunted fish",
+    "source_record_iri": "doc:my-bot/discord-message/1497274794586931220"
+  }'
+```
+
+The episodic chunk + every extracted fact now has a stable pointer
+back to your document IRI. Recall will surface that IRI in
+`record_iri` / `subject` columns; the donto CLI's `donto blob
+fetch` and `donto blob tombstone` operate on the blob behind it.
+
+### Bulk file ingest via CLI
+
+For uploading existing files (PDFs, GEDCOMs, scanned docs,
+training data, archives), the CLI is more ergonomic than HTTP:
+
+```bash
+# One file at a time.
+donto blob upload /path/to/file.pdf
+
+# Or walk a directory recursively. Idempotent per file.
+donto blob sync /path/to/research-corpus/
+
+# Inspect what is registered.
+donto blob list  --limit 20
+donto blob stats           # total bytes, count, mime breakdown
+
+# Pull a blob back out by its sha256 hex (or its document IRI).
+donto blob fetch <sha256-hex> --out /tmp/recovered.pdf
+```
+
+After `donto blob upload`, the blob exists in
+`donto_blob` but has no `donto_document` wrapping it. Use
+`/sources/register` + `/documents/revision` (Steps 1+2 above) to
+mint a document over the blob, then `/memorize` to land the
+linkage in donto-memory.
+
+### Recap: when to use each layer
+
+| Layer | Best for | Tombstoneable? | Dedupes bytes? |
+|---|---|---|---|
+| `/memorize` only | Short messages, preferences, single utterances. | No — append-only literal. | No — every `/memorize` writes its own statement. |
+| `/memorize` + `/sources/register` + `/documents/revision` | Any chunk you might tombstone, share, or re-version later. | **Yes** — via `donto blob tombstone`. | **Yes** — `donto_blob` is sha256-keyed. |
+| `donto blob upload` (CLI) | Bulk files, batch ingest, anything off the request path. | Yes. | Yes. |
+
+### Policy IRIs to know
+
+The substrate ships with sensible default policy capsules. Use
+whichever fits — never invent an unattested IRI:
+
+  - `policy:user-conversation` — content the user authored;
+    `read_content` permitted to the agent, `share_with_third_party`
+    requires attestation.
+  - `policy:agent-internal` — the agent's own scratch / state;
+    `read_content` permitted to the agent, everything else closed.
+  - `policy:public-corpus` — public reference material;
+    everything except `train_model` and `request_deletion` permitted.
+
+If you need a custom policy capsule, ask the substrate operator to
+mint it via `donto policy register`. Do **not** call
+`/sources/register` with a non-existent `policy_iri` — the
+substrate will accept the call, but every `read_content` recall on
+that document will fail closed.
+
+---
+
+## 14. Resources
 
   - **OpenAPI 3.1 spec:** [`/openapi.json`](/openapi.json)
   - **Swagger UI:** [`/docs`](/docs)
