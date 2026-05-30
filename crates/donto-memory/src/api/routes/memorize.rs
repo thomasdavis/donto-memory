@@ -37,13 +37,23 @@ pub struct MemorizeReq {
     /// episodic.
     #[serde(default = "default_true")]
     pub extract: bool,
-    /// Override the runtime's default extraction mode. `single` runs
-    /// one LLM call (~20-30 facts, ~5-10 s); `exhaustive` runs five
-    /// apertures in parallel (~100+ facts, ~30-60 s, ~5× tokens).
+    /// Override the runtime's default extraction mode.
+    /// - `single` — one LLM call (~20-30 facts, ~5-10 s).
+    /// - `exhaustive` — five fixed apertures in parallel
+    ///   (~100+ facts, ~30-60 s, ~5× tokens).
+    /// - `deep` — N sequential passes (default 3, max 10). Each pass
+    ///   sees prior facts and is asked to find new angles without a
+    ///   rigid per-pass lens. Higher quality + dedup at end. Slower
+    ///   than `exhaustive` but no parallel cost spikes.
+    ///
     /// Defaults to `DONTO_MEMORY_EXTRACT_MODE` (which itself defaults
     /// to `exhaustive`).
     #[serde(default)]
     pub mode: Option<String>,
+    /// For `mode = "deep"`: how many sequential passes to run. Clamped
+    /// to [1, 10]. Defaults to 3 when omitted.
+    #[serde(default)]
+    pub passes: Option<u32>,
     /// Optional images to attach. Each entry is either an http(s)
     /// URL the LLM provider can fetch, or a `data:image/png;base64,…`
     /// data URL with the bytes inline. When non-empty, the extractor
@@ -342,9 +352,22 @@ async fn memorize_one(
                             )
                             .await
                     }
+                    "deep" | "sequential" | "iterative" => {
+                        let passes = req.passes.unwrap_or(3);
+                        extractor
+                            .extract_deep(
+                                &effective_text,
+                                &req.holder,
+                                req.session_id.as_deref(),
+                                Some(&episodic_record.record_iri),
+                                &req.images,
+                                passes,
+                            )
+                            .await
+                    }
                     other => {
                         return Err(MemorizeError::BadInput(format!(
-                            "unknown extract mode {other:?}; expected single|exhaustive"
+                            "unknown extract mode {other:?}; expected single|exhaustive|deep"
                         )));
                     }
                 };

@@ -484,8 +484,30 @@ fn render_detail_html(d: &JobDetail) -> String {
 
     // If this was a memorize, surface the extracted facts as a table.
     if let Some(facts) = extract_facts_from_response(&d.response) {
+        // Count facts per aperture/pass so we can label section headers.
+        let mut per_aperture: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+        for f in facts.iter() {
+            let ap = f.get("aperture").and_then(|v| v.as_str()).unwrap_or("—").to_string();
+            *per_aperture.entry(ap).or_insert(0) += 1;
+        }
+        let group_count = per_aperture.len();
+
         body.push_str(&format!(r#"<h2>extracted facts <span class="pill">{} rows</span></h2>"#, facts.len()));
         body.push_str(r#"<p class="meta">Every ontological statement the LLM produced from the memorized text. Each one becomes a real <code>donto_statement</code> row in the substrate.</p>"#);
+
+        // If this came from a deep / multi-aperture extraction, show a
+        // per-pass summary line before the table.
+        if group_count > 1 {
+            let summary: Vec<String> = per_aperture
+                .iter()
+                .map(|(k, n)| format!("<code>{}</code>: {}", html_escape(k), n))
+                .collect();
+            body.push_str(&format!(
+                r#"<p class="meta">Facts by pass/aperture: {}</p>"#,
+                summary.join(" · "),
+            ));
+        }
+
         body.push_str(r#"<table>
 <thead><tr>
   <th class="num">#</th>
@@ -497,7 +519,21 @@ fn render_detail_html(d: &JobDetail) -> String {
   <th class="num">conf</th>
   <th>aperture</th>
 </tr></thead><tbody>"#);
+
+        let mut last_aperture: Option<String> = None;
         for (i, f) in facts.iter().enumerate() {
+            let aperture = f.get("aperture").and_then(|v| v.as_str()).unwrap_or("—").to_string();
+            // Insert a section-header row whenever the aperture/pass
+            // changes. Only useful when there's more than one group.
+            if group_count > 1 && last_aperture.as_deref() != Some(aperture.as_str()) {
+                let count = per_aperture.get(&aperture).copied().unwrap_or(0);
+                body.push_str(&format!(
+                    r#"<tr class="aperture-divider"><td colspan="8" style="background:var(--accent-soft); padding:.6em .8em; font-weight:600;">▸ {} <span class="pill">{} facts</span></td></tr>"#,
+                    html_escape(&aperture),
+                    count,
+                ));
+                last_aperture = Some(aperture.clone());
+            }
             body.push_str(&format!(
                 r#"<tr>
                   <td class="num">{}</td>
@@ -516,7 +552,7 @@ fn render_detail_html(d: &JobDetail) -> String {
                 html_escape(f.get("polarity").and_then(|v| v.as_str()).unwrap_or("asserted")),
                 html_escape(f.get("modality").and_then(|v| v.as_str()).unwrap_or("—")),
                 f.get("confidence").and_then(|v| v.as_f64()).map(|n| format!("{:.2}", n)).unwrap_or_else(|| "—".to_string()),
-                html_escape(f.get("aperture").and_then(|v| v.as_str()).unwrap_or("—")),
+                html_escape(&aperture),
             ));
         }
         body.push_str("</tbody></table>");

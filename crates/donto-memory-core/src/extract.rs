@@ -489,6 +489,107 @@ impl MemoryExtractor {
         })
     }
 
+    /// Sequential multi-pass extraction. Runs `passes` LLM calls one
+    /// after the other (no parallelism). Each pass sees the union of
+    /// facts produced by earlier passes and is asked to find new
+    /// angles, deeper implications, additional entities. No rigid
+    /// per-pass system prompts — the SINGLE maximalist prompt is reused
+    /// every pass and divergence is driven entirely by showing the
+    /// model what's already covered.
+    ///
+    /// Content-hash deduplication runs at the end across the union.
+    /// Each fact is tagged with `aperture = "pass_<n>"` so the job
+    /// page can show per-pass attribution. `passes` is clamped to
+    /// [1, 10]; 3 is a reasonable default.
+    pub async fn extract_deep(
+        &self,
+        text: &str,
+        holder: &str,
+        session_id: Option<&str>,
+        source_record_iri: Option<&str>,
+        images: &[String],
+        passes: u32,
+    ) -> Result<ExtractionResult, ExtractError> {
+        let started = std::time::Instant::now();
+        let passes = passes.clamp(1, 10);
+
+        let mut seen: BTreeSet<String> = BTreeSet::new();
+        let mut merged_usage: Option<ExtractionUsage> = None;
+        let mut pass_yields: Vec<ApertureYield> = Vec::new();
+        let mut all_facts: Vec<ExtractedFact> = Vec::new();
+        let mut dedup_collisions = 0u32;
+        let mut model = self.model.clone();
+
+        for pass_n in 1..=passes {
+            let pass_id = format!("pass_{pass_n}");
+            let prior_block = if all_facts.is_empty() {
+                None
+            } else {
+                Some(format_prior_facts_block(&all_facts))
+            };
+            let result = self
+                .call_one_with_context(
+                    SINGLE_PROMPT,
+                    &pass_id,
+                    text,
+                    holder,
+                    session_id,
+                    source_record_iri,
+                    images,
+                    prior_block.as_deref(),
+                )
+                .await;
+
+            match result {
+                Ok(y) => {
+                    pass_yields.push(ApertureYield {
+                        aperture: pass_id.clone(),
+                        raw_facts: y.raw_count,
+                        elapsed_ms: y.elapsed_ms,
+                        error: None,
+                    });
+                    if let Some(u) = y.usage {
+                        match merged_usage.as_mut() {
+                            None => merged_usage = Some(u),
+                            Some(acc) => acc.merge_in(&u),
+                        }
+                    }
+                    model = y.model;
+                    for mut fact in y.facts {
+                        // Always overwrite the aperture so the pass
+                        // label is authoritative even when the LLM
+                        // suggested one in the JSON.
+                        fact.aperture = Some(pass_id.clone());
+                        let key = fact.content_key();
+                        if seen.insert(key) {
+                            all_facts.push(fact);
+                        } else {
+                            dedup_collisions += 1;
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!(pass = pass_id.as_str(), error = %e, "deep pass failed");
+                    pass_yields.push(ApertureYield {
+                        aperture: pass_id,
+                        raw_facts: 0,
+                        elapsed_ms: 0,
+                        error: Some(e.to_string()),
+                    });
+                }
+            }
+        }
+
+        Ok(ExtractionResult {
+            model,
+            elapsed_ms: started.elapsed().as_millis() as u64,
+            facts: all_facts,
+            usage: merged_usage,
+            aperture_yields: pass_yields,
+            dedup_collisions,
+        })
+    }
+
     async fn call_one(
         &self,
         system_prompt: &str,
@@ -499,8 +600,41 @@ impl MemoryExtractor {
         source_record_iri: Option<&str>,
         images: &[String],
     ) -> Result<OneCallResult, ExtractError> {
+        self.call_one_with_context(
+            system_prompt,
+            aperture_id,
+            text,
+            holder,
+            session_id,
+            source_record_iri,
+            images,
+            None,
+        )
+        .await
+    }
+
+    /// Same as `call_one` but optionally prepends a "prior facts" block
+    /// to the user prompt. Used by `extract_deep` to encourage each
+    /// pass to find facts the previous passes missed without dictating
+    /// a specific extraction lens.
+    #[allow(clippy::too_many_arguments)]
+    async fn call_one_with_context(
+        &self,
+        system_prompt: &str,
+        aperture_id: &str,
+        text: &str,
+        holder: &str,
+        session_id: Option<&str>,
+        source_record_iri: Option<&str>,
+        images: &[String],
+        prior_facts_block: Option<&str>,
+    ) -> Result<OneCallResult, ExtractError> {
         let started = std::time::Instant::now();
-        let user_prompt = build_user_prompt(text, holder, session_id, source_record_iri);
+        let base_prompt = build_user_prompt(text, holder, session_id, source_record_iri);
+        let user_prompt = match prior_facts_block {
+            Some(prior) if !prior.is_empty() => format!("{prior}\n\n{base_prompt}"),
+            _ => base_prompt,
+        };
 
         // When images are attached, switch to the OpenAI multimodal
         // message format: `content` becomes an array of parts. Each
@@ -738,6 +872,46 @@ fn build_user_prompt(
     format!(
         "holder: {holder}\n{session_block}{src_block}\nchunk:\n{text}\n\n{COMMON_FRAGMENT}"
     )
+}
+
+/// Format already-extracted facts as a context block for subsequent
+/// deep-mode passes. Deliberately light-touch: lists the (subject,
+/// predicate, object) tuples and asks for new angles. Does NOT
+/// prescribe a specific extraction lens (linguistic, presupposition,
+/// inferential, etc.) — the model picks its own divergence.
+///
+/// Truncates to the most recent 300 facts to keep prompt size bounded
+/// while still giving the model enough signal to avoid repetition.
+fn format_prior_facts_block(facts: &[ExtractedFact]) -> String {
+    let take = facts.len().saturating_sub(facts.len().saturating_sub(300));
+    let start = facts.len().saturating_sub(300);
+    let _ = take;
+    let mut s = String::with_capacity(facts.len() * 80);
+    s.push_str(
+        "Earlier passes over this same chunk already extracted the facts below. \
+Do NOT repeat them. Instead, find genuinely new angles: deeper inferences, \
+unstated assumptions, additional entities, alternate framings, finer-grained \
+properties, temporal/spatial nuance, causal links, contrastive readings, \
+metalinguistic facts about the utterance itself, or anything else you would \
+not have produced in a single pass. Be as thorough as before — aim to add \
+20+ new facts. If the chunk genuinely has no more facts to extract, return \
+{\"facts\": []}.\n\nALREADY EXTRACTED (subject | predicate | object):\n",
+    );
+    for fact in &facts[start..] {
+        let obj = match (&fact.object_iri, &fact.object_lit) {
+            (Some(i), _) => i.clone(),
+            (None, Some(l)) => l.to_string(),
+            (None, None) => "—".to_string(),
+        };
+        s.push_str("- ");
+        s.push_str(&fact.subject);
+        s.push_str(" | ");
+        s.push_str(&fact.predicate);
+        s.push_str(" | ");
+        s.push_str(&obj);
+        s.push('\n');
+    }
+    s
 }
 
 #[derive(Debug, Deserialize)]
