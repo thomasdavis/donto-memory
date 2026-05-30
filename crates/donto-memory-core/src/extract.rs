@@ -27,7 +27,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::Settings;
 
@@ -520,13 +520,32 @@ impl MemoryExtractor {
         let mut dedup_collisions = 0u32;
         let mut model = self.model.clone();
 
+        info!(
+            holder = holder,
+            session_id = session_id.unwrap_or("-"),
+            passes = passes,
+            text_chars = text.chars().count(),
+            images = images.len(),
+            "deep extract starting"
+        );
+
         for pass_n in 1..=passes {
             let pass_id = format!("pass_{pass_n}");
+            let prior_count = all_facts.len();
             let prior_block = if all_facts.is_empty() {
                 None
             } else {
                 Some(format_prior_facts_block(&all_facts))
             };
+            info!(
+                pass = pass_id.as_str(),
+                pass_n = pass_n,
+                of = passes,
+                prior_facts = prior_count,
+                cumulative_unique = all_facts.len(),
+                "deep pass starting"
+            );
+            let pass_started = std::time::Instant::now();
             let result = self
                 .call_one_with_context(
                     SINGLE_PROMPT,
@@ -542,6 +561,8 @@ impl MemoryExtractor {
 
             match result {
                 Ok(y) => {
+                    let mut added = 0u32;
+                    let mut collided = 0u32;
                     pass_yields.push(ApertureYield {
                         aperture: pass_id.clone(),
                         raw_facts: y.raw_count,
@@ -563,13 +584,29 @@ impl MemoryExtractor {
                         let key = fact.content_key();
                         if seen.insert(key) {
                             all_facts.push(fact);
+                            added += 1;
                         } else {
                             dedup_collisions += 1;
+                            collided += 1;
                         }
                     }
+                    info!(
+                        pass = pass_id.as_str(),
+                        elapsed_ms = pass_started.elapsed().as_millis() as u64,
+                        raw_facts = y.raw_count,
+                        new_unique = added,
+                        dedup_collisions_in_pass = collided,
+                        cumulative_unique = all_facts.len(),
+                        "deep pass complete"
+                    );
                 }
                 Err(e) => {
-                    warn!(pass = pass_id.as_str(), error = %e, "deep pass failed");
+                    warn!(
+                        pass = pass_id.as_str(),
+                        elapsed_ms = pass_started.elapsed().as_millis() as u64,
+                        error = %e,
+                        "deep pass failed"
+                    );
                     pass_yields.push(ApertureYield {
                         aperture: pass_id,
                         raw_facts: 0,
@@ -580,9 +617,24 @@ impl MemoryExtractor {
             }
         }
 
+        let total_elapsed = started.elapsed().as_millis() as u64;
+        let successful_passes = pass_yields.iter().filter(|y| y.error.is_none()).count();
+        let failed_passes = pass_yields.iter().filter(|y| y.error.is_some()).count();
+        info!(
+            holder = holder,
+            session_id = session_id.unwrap_or("-"),
+            total_elapsed_ms = total_elapsed,
+            passes_attempted = passes,
+            passes_successful = successful_passes,
+            passes_failed = failed_passes,
+            total_unique_facts = all_facts.len(),
+            total_dedup_collisions = dedup_collisions,
+            "deep extract finished"
+        );
+
         Ok(ExtractionResult {
             model,
-            elapsed_ms: started.elapsed().as_millis() as u64,
+            elapsed_ms: total_elapsed,
             facts: all_facts,
             usage: merged_usage,
             aperture_yields: pass_yields,

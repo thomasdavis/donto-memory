@@ -484,7 +484,16 @@ async fn memorize_one(
                         usage = result.usage.clone();
                         aperture_yields = result.aperture_yields.clone();
                         extracted_facts = result.facts.clone();
-                        for fact in &result.facts {
+                        tracing::info!(
+                            holder = req.holder.as_str(),
+                            session_id = req.session_id.as_deref().unwrap_or("-"),
+                            facts_to_ingest = result.facts.len(),
+                            "starting semantic fact ingest"
+                        );
+                        let ingest_started = std::time::Instant::now();
+                        let mut last_log = std::time::Instant::now();
+                        let mut ingest_errors = 0usize;
+                        for (i, fact) in result.facts.iter().enumerate() {
                             match ingest_fact(s, &semantic, fact, req, &episodic_record.record_iri)
                                 .await
                             {
@@ -493,13 +502,44 @@ async fn memorize_one(
                                     semantic_record_ids.push(id);
                                 }
                                 Err(e) => {
+                                    ingest_errors += 1;
                                     warnings.push(format!(
                                         "fact ingest failed (subject={}, predicate={}): {e}",
                                         fact.subject, fact.predicate
                                     ));
+                                    if ingest_errors <= 5 {
+                                        warn!(
+                                            holder = req.holder.as_str(),
+                                            fact_index = i,
+                                            subject = fact.subject.as_str(),
+                                            predicate = fact.predicate.as_str(),
+                                            error = %e,
+                                            "fact ingest failed"
+                                        );
+                                    }
                                 }
                             }
+                            if last_log.elapsed() >= std::time::Duration::from_secs(5) {
+                                tracing::info!(
+                                    holder = req.holder.as_str(),
+                                    progress = format!("{}/{}", i + 1, result.facts.len()).as_str(),
+                                    ingested = facts_ingested,
+                                    errors = ingest_errors,
+                                    elapsed_ms = ingest_started.elapsed().as_millis() as u64,
+                                    "ingest progress"
+                                );
+                                last_log = std::time::Instant::now();
+                            }
                         }
+                        tracing::info!(
+                            holder = req.holder.as_str(),
+                            session_id = req.session_id.as_deref().unwrap_or("-"),
+                            total = result.facts.len(),
+                            ingested = facts_ingested,
+                            errors = ingest_errors,
+                            elapsed_ms = ingest_started.elapsed().as_millis() as u64,
+                            "ingest complete"
+                        );
                     }
                 }
             }
