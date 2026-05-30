@@ -141,13 +141,34 @@ impl MemoryModule for EpisodicModule {
     async fn retrieve(
         &self,
         substrate: &SubstrateClient,
+        pool: &Pool,
         consumer_iri: &str,
         query: &RecallQuery,
     ) -> Result<Vec<RecallRow>, ModuleError> {
-        let scope = match &query.session_id {
-            Some(s) => json!({"include": [format!("{consumer_iri}/episodic/session/{s}")]}),
-            None => json!({"include": [format!("{consumer_iri}/episodic")]}),
+        // Memory session contexts are flat siblings (no parent set on
+        // donto_context), so the substrate's `include_descendants`
+        // flag cannot fan out a single `ctx:memory/episodic` include
+        // into every `ctx:memory/episodic/session/<id>` underneath.
+        // Enumerate explicitly when session_id is omitted.
+        let includes: Vec<String> = if let Some(s) = &query.session_id {
+            vec![format!("{consumer_iri}/episodic/session/{s}")]
+        } else {
+            let sessions = overlays::list_sessions_for_holder(
+                pool,
+                &query.holder,
+                &self.spec().module_iri,
+            )
+            .await?;
+            sessions
+                .into_iter()
+                .map(|s| format!("{consumer_iri}/episodic/session/{s}"))
+                .collect()
         };
+        if includes.is_empty() {
+            // No sessions known for this holder → nothing to recall.
+            return Ok(Vec::new());
+        }
+        let scope = json!({"include": includes});
         let resp = substrate
             .recall(
                 &query.holder,

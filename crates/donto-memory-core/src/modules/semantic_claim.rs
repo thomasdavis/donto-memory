@@ -123,13 +123,29 @@ impl MemoryModule for SemanticClaimModule {
     async fn retrieve(
         &self,
         substrate: &SubstrateClient,
+        pool: &Pool,
         consumer_iri: &str,
         query: &RecallQuery,
     ) -> Result<Vec<RecallRow>, ModuleError> {
-        let scope = match &query.session_id {
-            Some(s) => json!({"include": [format!("{consumer_iri}/claims/session/{s}")]}),
-            None => json!({"include": [format!("{consumer_iri}/claims")]}),
+        // Same fan-out pattern as episodic — see comment there.
+        let includes: Vec<String> = if let Some(s) = &query.session_id {
+            vec![format!("{consumer_iri}/claims/session/{s}")]
+        } else {
+            let sessions = overlays::list_sessions_for_holder(
+                pool,
+                &query.holder,
+                &self.spec().module_iri,
+            )
+            .await?;
+            sessions
+                .into_iter()
+                .map(|s| format!("{consumer_iri}/claims/session/{s}"))
+                .collect()
         };
+        if includes.is_empty() {
+            return Ok(Vec::new());
+        }
+        let scope = json!({"include": includes});
         let resp = substrate
             .recall(
                 &query.holder,

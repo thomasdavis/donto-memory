@@ -180,6 +180,7 @@ async fn episodic_round_trip() {
     let rows = episodic
         .retrieve(
             &sub,
+            &pool,
             &s.consumer_iri,
             &RecallQuery {
                 holder: holder.clone(),
@@ -364,6 +365,7 @@ async fn preference_supersedes_prior_value() {
     let rows = preference
         .retrieve(
             &sub,
+            &pool,
             &s.consumer_iri,
             &RecallQuery {
                 holder: holder.clone(),

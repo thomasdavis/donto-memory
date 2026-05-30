@@ -250,6 +250,32 @@ pub async fn get_record(
     Ok(row.map(record_from_row))
 }
 
+/// Enumerate distinct session IRIs known for a holder + module
+/// combination. Used by module retrieve() to expand a holder-only
+/// recall into an explicit `include: [...]` of all known session
+/// contexts (the substrate's `include_descendants` flag does not
+/// match prefix-shaped IRIs when the contexts are stored as flat
+/// siblings — which is the case for memory contexts).
+pub async fn list_sessions_for_holder(
+    pool: &Pool,
+    holder_iri: &str,
+    module_iri: &str,
+) -> Result<Vec<String>, OverlayError> {
+    let c = pool.get().await?;
+    let rows = c
+        .query(
+            "select distinct session_iri
+               from donto_x_memory_record
+              where holder_iri = $1
+                and module_iri = $2
+                and session_iri is not null
+              limit 1000",
+            &[&holder_iri, &module_iri],
+        )
+        .await?;
+    Ok(rows.into_iter().map(|r| r.get::<_, String>(0)).collect())
+}
+
 pub async fn find_record_by_statement(
     pool: &Pool,
     statement_id: Uuid,

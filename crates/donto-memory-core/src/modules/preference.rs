@@ -191,9 +191,14 @@ impl MemoryModule for PreferenceModule {
     async fn retrieve(
         &self,
         substrate: &SubstrateClient,
+        _pool: &Pool,
         consumer_iri: &str,
         query: &RecallQuery,
     ) -> Result<Vec<RecallRow>, ModuleError> {
+        // Preferences are keyed by holder, not by session — the
+        // context include is a single fixed-per-holder URI so we
+        // don't need to enumerate sessions like episodic /
+        // semantic-claim do.
         let scope = json!({
             "include": [format!("{consumer_iri}/preferences/holder/{}", query.holder)]
         });

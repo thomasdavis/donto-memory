@@ -90,9 +90,16 @@ pub trait MemoryModule: Send + Sync + std::fmt::Debug + 'static {
     /// The module is responsible for narrowing scope/predicate to its
     /// form/function. Policy gating + identity-lens resolution happen
     /// substrate-side via `substrate.recall(...)`.
+    ///
+    /// `pool` is available so modules can enumerate distinct session
+    /// IRIs for a holder-only recall — the substrate's
+    /// `include_descendants` flag does not cover memory contexts
+    /// (they're stored as flat siblings) so the consumer side must
+    /// fan out explicitly.
     async fn retrieve(
         &self,
         substrate: &SubstrateClient,
+        pool: &Pool,
         consumer_iri: &str,
         query: &RecallQuery,
     ) -> Result<Vec<RecallRow>, ModuleError>;

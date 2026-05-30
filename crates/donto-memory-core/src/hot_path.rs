@@ -46,9 +46,12 @@ pub async fn compose_bundle(
         selected.iter().map(|m| m.spec().module_iri.clone()).collect();
 
     // 2. Fan out.
-    let futures = selected
-        .iter()
-        .map(|m| async move { (m.spec().module_iri.clone(), m.retrieve(substrate, consumer_iri, query).await) });
+    let futures = selected.iter().map(|m| async move {
+        (
+            m.spec().module_iri.clone(),
+            m.retrieve(substrate, pool, consumer_iri, query).await,
+        )
+    });
     let mut per_module: BTreeMap<String, Vec<RecallRow>> = BTreeMap::new();
     for (iri, res) in join_all(futures).await {
         match res {
