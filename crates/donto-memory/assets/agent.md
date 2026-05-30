@@ -780,9 +780,22 @@ periods, a single careless restart can cost $2–4.
 
 Two operational practices to avoid this:
 
-1. **Drain before maintenance.** Watch the audit log; wait for
-   `(queued)` rows to clear (or for the queue depth to drop to
-   acceptable levels) before restarting.
+1. **Drain before maintenance.** `GET /api` returns a live
+   snapshot of the async-memorize queue. The one-liner safety
+   check:
+   ```bash
+   if curl -sS https://memories.apexpots.com/api | \
+        jq -e '.async_memorize_queue.drain_safe' >/dev/null; then
+       sudo systemctl restart donto-memory-api
+   else
+       echo "queue not drained, restart aborted"
+       curl -sS https://memories.apexpots.com/api | \
+         jq .async_memorize_queue
+   fi
+   ```
+   The same payload gives you `pending`,
+   `oldest_pending_age_seconds`, and 24-hour rolling counts of
+   `completed_24h`, `failed_24h`, and `lost_24h`.
 2. **Prefer hot-config changes.** Anything you can change without
    a restart (e.g. dropping an env-var-derived flag that only
    affects future calls, or rolling a flag through a config-watch

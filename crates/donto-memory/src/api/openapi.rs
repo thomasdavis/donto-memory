@@ -692,6 +692,27 @@ pub fn document() -> Value {
                         "ops_token_required": {
                             "type": "boolean",
                             "description": "True when DONTO_MEMORY_OPS_TOKEN is set on the runtime. /jobs and /explore require the bearer token in that case."
+                        },
+                        "async_memorize_queue": {
+                            "type": "object",
+                            "description": "Live snapshot of the async-memorize queue. Operators use `drain_safe` to safely time restarts: when true, no in-flight tasks would be killed by a systemctl restart.",
+                            "properties": {
+                                "pending": {
+                                    "type": "integer",
+                                    "description": "Currently in-flight: queued but no (async)/(async-failed)/(lost) completion yet.",
+                                    "example": 0
+                                },
+                                "oldest_pending_age_seconds": {
+                                    "type": "integer",
+                                    "nullable": true,
+                                    "description": "Age (in seconds) of the oldest pending task. Null when pending = 0.",
+                                    "example": null
+                                },
+                                "completed_24h": { "type": "integer", "example": 11 },
+                                "failed_24h":    { "type": "integer", "example": 0 },
+                                "lost_24h":      { "type": "integer", "description": "Count of (lost) rows over the last 24h — a measure of restart cost.", "example": 22 },
+                                "drain_safe":    { "type": "boolean", "description": "Shortcut for `pending == 0`. True when a restart will not lose work.", "example": true }
+                            }
                         }
                     }
                 },
