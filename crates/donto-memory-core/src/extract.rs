@@ -956,9 +956,12 @@ fn build_user_prompt(
 /// Truncates to the most recent 300 facts to keep prompt size bounded
 /// while still giving the model enough signal to avoid repetition.
 fn format_prior_facts_block(facts: &[ExtractedFact]) -> String {
-    let take = facts.len().saturating_sub(facts.len().saturating_sub(300));
+    // Cap the included facts to the most-recent 300. `start` is the
+    // index of the first fact to include; the slice `&facts[start..]`
+    // gives at most 300 entries. Bounds the prompt size so even on a
+    // 7-pass deep extraction with 600+ accumulated facts we don't
+    // blow past max_tokens on the input side.
     let start = facts.len().saturating_sub(300);
-    let _ = take;
     let mut s = String::with_capacity(facts.len() * 80);
     s.push_str(
         "Earlier passes over this same chunk already extracted the facts below. \
