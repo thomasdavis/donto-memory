@@ -421,6 +421,21 @@ async fn memorize_one(
         .ingest(&s.substrate, &s.pool, &s.settings.consumer_iri, &episodic_input)
         .await?;
 
+    // Ensure both the episodic context and the (about-to-be-used)
+    // semantic-claim context have the self-read assignment in place.
+    // Idempotent — a no-op on contexts we've already seen.
+    if let Some(sid) = req.session_id.as_deref() {
+        let ep_ctx = format!("{}/episodic/session/{sid}", s.settings.consumer_iri);
+        let cl_ctx = format!("{}/claims/session/{sid}", s.settings.consumer_iri);
+        for ctx in [ep_ctx, cl_ctx] {
+            if let Err(e) =
+                donto_memory_core::overlays::ensure_memory_self_read_grant(&s.pool, &ctx).await
+            {
+                warn!(context = %ctx, error = %e, "self-read grant insert failed (non-fatal)");
+            }
+        }
+    }
+
     let mut warnings: Vec<String> = ocr_warnings;
     let mut facts_extracted = 0usize;
     let mut facts_ingested = 0usize;

@@ -344,6 +344,161 @@ pub async fn list_sessions_for_holder(
     Ok(rows.into_iter().map(|r| r.get::<_, String>(0)).collect())
 }
 
+/// A statement row materialised from `donto_statement`, used by the
+/// full-text search path on `/recall`. Mirrors the fields the substrate
+/// would normally return, plus the trgm-similarity score we order by.
+/// Self-read policy IRI applied to every memory context. The policy
+/// row + bulk assignment for existing contexts is seeded by SQL on
+/// the production DB; this constant lets future memorize calls insert
+/// fresh assignments for any new context they create.
+pub const MEMORY_SELF_READ_POLICY: &str = "policy:memory-self-read";
+
+/// Ensure the holder has read_content on the given context. Inserts a
+/// `donto_access_assignment` row pointing at the
+/// `policy:memory-self-read` capsule, idempotent on the unique
+/// `(target_kind, target_id, policy_iri)` constraint. Safe to call
+/// on every memorize — the conflict path is a no-op.
+pub async fn ensure_memory_self_read_grant(
+    pool: &Pool,
+    context_iri: &str,
+) -> Result<(), OverlayError> {
+    let c = pool.get().await?;
+    c.execute(
+        "insert into donto_access_assignment \
+             (target_kind, target_id, policy_iri, assigned_by, notes) \
+         values ('context', $1, $2, 'donto-memory:auto', 'memory self-read auto-grant') \
+         on conflict (target_kind, target_id, policy_iri) do nothing",
+        &[&context_iri, &MEMORY_SELF_READ_POLICY],
+    )
+    .await?;
+    Ok(())
+}
+
+#[derive(Debug)]
+pub struct StatementHit {
+    pub statement_id: Uuid,
+    pub subject: String,
+    pub predicate: String,
+    pub object_iri: Option<String>,
+    pub object_lit: Option<serde_json::Value>,
+    pub context: String,
+    pub tx_lo: chrono::DateTime<chrono::Utc>,
+    pub tx_hi: Option<chrono::DateTime<chrono::Utc>>,
+    pub flags: i16,
+    pub score: f64,
+}
+
+/// Full-text search over `donto_statement`, restricted to statement_ids
+/// the caller already vetted as belonging to the holder. Uses the
+/// `gin_trgm_ops` indexes on `subject` and `(object_lit->>'v')`. The
+/// `predicate` and `object_iri` columns get a plain ILIKE scan, which
+/// is cheap because the statement_id whitelist keeps the result set
+/// small.
+///
+/// Skipped automatically when the owned set is empty.
+pub async fn fulltext_search_owned_statements(
+    pool: &Pool,
+    owned: &std::collections::HashSet<Uuid>,
+    query: &str,
+    limit: i32,
+) -> Result<Vec<StatementHit>, OverlayError> {
+    if owned.is_empty() || query.is_empty() {
+        return Ok(Vec::new());
+    }
+    let c = pool.get().await?;
+    let pattern = format!("%{query}%");
+    let ids: Vec<Uuid> = owned.iter().copied().collect();
+    // Score is a coarse boost: subject match > object_lit match >
+    // predicate / object_iri match. Within a tier, order by tx_lo desc
+    // so the freshest fact wins.
+    let rows = c
+        .query(
+            "select statement_id, subject, predicate, object_iri, object_lit, \
+                    context, lower(tx_time) as tx_lo, upper(tx_time) as tx_hi, \
+                    flags, \
+                    (case when subject ilike $1 then 1.0::float8 \
+                          when coalesce(object_lit->>'v','') ilike $1 then 0.8::float8 \
+                          when coalesce(object_iri,'') ilike $1 then 0.6::float8 \
+                          when predicate ilike $1 then 0.4::float8 \
+                          else 0.0::float8 end) as score \
+               from donto_statement \
+              where statement_id = any($2) \
+                and upper(tx_time) is null \
+                and ( subject ilike $1 \
+                   or coalesce(object_lit->>'v','') ilike $1 \
+                   or coalesce(object_iri,'') ilike $1 \
+                   or predicate ilike $1 ) \
+              order by score desc, lower(tx_time) desc \
+              limit $3",
+            &[&pattern, &ids, &(limit as i64)],
+        )
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| StatementHit {
+            statement_id: r.get(0),
+            subject: r.get(1),
+            predicate: r.get(2),
+            object_iri: r.get(3),
+            object_lit: r.get(4),
+            context: r.get(5),
+            tx_lo: r.get(6),
+            tx_hi: r.get(7),
+            flags: r.get(8),
+            score: r.get(9),
+        })
+        .collect())
+}
+
+/// Same as `fulltext_search_owned_statements` but for episodic chunks.
+/// Episodic records are anchored by `record_iri` as the statement's
+/// subject (the chunk text lives in `object_lit->>'v'`), so the
+/// whitelist is a set of record IRIs (strings), not statement UUIDs.
+pub async fn fulltext_search_owned_episodic(
+    pool: &Pool,
+    owned_record_iris: &std::collections::HashSet<String>,
+    predicate_filter: &str,
+    query: &str,
+    limit: i32,
+) -> Result<Vec<StatementHit>, OverlayError> {
+    if owned_record_iris.is_empty() || query.is_empty() {
+        return Ok(Vec::new());
+    }
+    let c = pool.get().await?;
+    let pattern = format!("%{query}%");
+    let iris: Vec<String> = owned_record_iris.iter().cloned().collect();
+    let rows = c
+        .query(
+            "select statement_id, subject, predicate, object_iri, object_lit, \
+                    context, lower(tx_time) as tx_lo, upper(tx_time) as tx_hi, \
+                    flags \
+               from donto_statement \
+              where predicate = $1 \
+                and subject = any($2) \
+                and upper(tx_time) is null \
+                and coalesce(object_lit->>'v','') ilike $3 \
+              order by lower(tx_time) desc \
+              limit $4",
+            &[&predicate_filter, &iris, &pattern, &(limit as i64)],
+        )
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| StatementHit {
+            statement_id: r.get(0),
+            subject: r.get(1),
+            predicate: r.get(2),
+            object_iri: r.get(3),
+            object_lit: r.get(4),
+            context: r.get(5),
+            tx_lo: r.get(6),
+            tx_hi: r.get(7),
+            flags: r.get(8),
+            score: 1.0,
+        })
+        .collect())
+}
+
 pub async fn find_record_by_statement(
     pool: &Pool,
     statement_id: Uuid,

@@ -127,7 +127,66 @@ impl MemoryModule for SemanticClaimModule {
         consumer_iri: &str,
         query: &RecallQuery,
     ) -> Result<Vec<RecallRow>, ModuleError> {
-        // Same fan-out pattern as episodic — see comment there.
+        // The holder-owned statement set is the basis for both the
+        // full-text search path and the substrate-recall path's
+        // post-filter, so we compute it once up front.
+        let owned: std::collections::HashSet<uuid::Uuid> =
+            overlays::list_root_statements_for_holder(
+                pool,
+                &query.holder,
+                &self.spec().module_iri,
+                query.session_id.as_deref(),
+            )
+            .await?;
+        if owned.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Full-text path: when the caller passed a free-text `query`,
+        // skip the substrate.recall round-trip (which has no FT
+        // matcher and was returning random non-matching rows) and
+        // hit the donto_statement trgm indexes directly, scoped to
+        // the owned statement_ids.
+        if let Some(q) = query.query.as_ref().filter(|s| !s.trim().is_empty()) {
+            let hits =
+                overlays::fulltext_search_owned_statements(pool, &owned, q, query.limit)
+                    .await?;
+            return Ok(hits
+                .into_iter()
+                .enumerate()
+                .map(|(i, h)| RecallRow {
+                    statement_id: h.statement_id,
+                    subject: h.subject,
+                    predicate: h.predicate,
+                    object_iri: h.object_iri,
+                    object_lit: h.object_lit,
+                    context: h.context,
+                    polarity: if h.flags & 1 != 0 { "negated" } else { "asserted" }
+                        .to_string(),
+                    maturity: 0,
+                    valid_lo: None,
+                    valid_hi: None,
+                    tx_lo: h.tx_lo,
+                    tx_hi: h.tx_hi,
+                    resolved_subject: None,
+                    resolved_object: None,
+                    effective_actions: Default::default(),
+                    // The substrate's policy gate is bypassed on this
+                    // path; we know each row is owned by the holder
+                    // (statement_id ∈ owned), so reading content is
+                    // self-policy and we mark allowed=true.
+                    action_allowed: true,
+                    record_iri: None,
+                    module_iri: Some(self.spec().module_iri.clone()),
+                    score: Some(h.score),
+                    rank: Some((i + 1) as i32),
+                })
+                .collect());
+        }
+
+        // No free-text query — fall back to the substrate.recall path
+        // for subject/predicate/object_iri filtered or full-session
+        // retrieval.
         let includes: Vec<String> = if let Some(s) = &query.session_id {
             vec![format!("{consumer_iri}/claims/session/{s}")]
         } else {
@@ -164,36 +223,10 @@ impl MemoryModule for SemanticClaimModule {
             )
             .await?;
 
-        // Holder-isolation filter — same justification as episodic.
-        // For semantic-claim the overlay record's root_statement
-        // matches the substrate row's statement_id.
-        let owned: std::collections::HashSet<uuid::Uuid> =
-            overlays::list_root_statements_for_holder(
-                pool,
-                &query.holder,
-                &self.spec().module_iri,
-                query.session_id.as_deref(),
-            )
-            .await?;
-
         let mut out = Vec::new();
         for (i, mut row) in resp.rows.into_iter().enumerate() {
             if !owned.contains(&row.statement_id) {
                 continue;
-            }
-            if let Some(q) = &query.query {
-                let q_lower = q.to_lowercase();
-                let hay_subject = row.subject.to_lowercase();
-                let hay_lit = row
-                    .object_lit
-                    .as_ref()
-                    .and_then(|v| v.get("v"))
-                    .and_then(|s| s.as_str())
-                    .map(|s| s.to_lowercase())
-                    .unwrap_or_default();
-                if !hay_subject.contains(&q_lower) && !hay_lit.contains(&q_lower) {
-                    continue;
-                }
             }
             row.module_iri = Some(self.spec().module_iri.clone());
             row.rank = Some((i + 1) as i32);

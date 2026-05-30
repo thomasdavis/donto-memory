@@ -145,6 +145,61 @@ impl MemoryModule for EpisodicModule {
         consumer_iri: &str,
         query: &RecallQuery,
     ) -> Result<Vec<RecallRow>, ModuleError> {
+        // Holder-owned record IRIs (= the chunk statement's subject)
+        // are the basis for both the FT and substrate-recall paths.
+        let owned: std::collections::HashSet<String> =
+            overlays::list_record_iris_for_holder(
+                pool,
+                &query.holder,
+                &self.spec().module_iri,
+                query.session_id.as_deref(),
+            )
+            .await?;
+        if owned.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Full-text path: search chunk literals directly via the
+        // donto_statement.object_lit_v_trgm GIN index, scoped to
+        // statements owned by this holder.
+        if let Some(q) = query.query.as_ref().filter(|s| !s.trim().is_empty()) {
+            let hits = overlays::fulltext_search_owned_episodic(
+                pool,
+                &owned,
+                EP_CHUNK,
+                q,
+                query.limit,
+            )
+            .await?;
+            return Ok(hits
+                .into_iter()
+                .enumerate()
+                .map(|(i, h)| RecallRow {
+                    statement_id: h.statement_id,
+                    subject: h.subject,
+                    predicate: h.predicate,
+                    object_iri: h.object_iri,
+                    object_lit: h.object_lit,
+                    context: h.context,
+                    polarity: if h.flags & 1 != 0 { "negated" } else { "asserted" }
+                        .to_string(),
+                    maturity: 0,
+                    valid_lo: None,
+                    valid_hi: None,
+                    tx_lo: h.tx_lo,
+                    tx_hi: h.tx_hi,
+                    resolved_subject: None,
+                    resolved_object: None,
+                    effective_actions: Default::default(),
+                    action_allowed: true,
+                    record_iri: None,
+                    module_iri: Some(self.spec().module_iri.clone()),
+                    score: Some(h.score),
+                    rank: Some((i + 1) as i32),
+                })
+                .collect());
+        }
+
         // Memory session contexts are flat siblings (no parent set on
         // donto_context), so the substrate's `include_descendants`
         // flag cannot fan out a single `ctx:memory/episodic` include
@@ -165,7 +220,6 @@ impl MemoryModule for EpisodicModule {
                 .collect()
         };
         if includes.is_empty() {
-            // No sessions known for this holder → nothing to recall.
             return Ok(Vec::new());
         }
         let scope = json!({"include": includes});
@@ -187,37 +241,10 @@ impl MemoryModule for EpisodicModule {
             )
             .await?;
 
-        // Holder-isolation filter: the substrate scopes by context,
-        // which can be shared across holders (e.g. two agents
-        // writing to the same `discord:channel:X` session). Without
-        // this allowlist a recall by holder A would see holder B's
-        // chunks. The record's subject is the chunk's context IRI,
-        // which equals the record_iri we store on
-        // donto_x_memory_record.
-        let owned: std::collections::HashSet<String> =
-            overlays::list_record_iris_for_holder(
-                pool,
-                &query.holder,
-                &self.spec().module_iri,
-                query.session_id.as_deref(),
-            )
-            .await?;
-
         let mut out = Vec::new();
         for (i, mut row) in resp.rows.into_iter().enumerate() {
             if !owned.contains(&row.subject) {
                 continue;
-            }
-            if let Some(q) = &query.query {
-                let lit_value = row
-                    .object_lit
-                    .as_ref()
-                    .and_then(|v| v.get("v"))
-                    .and_then(|s| s.as_str())
-                    .unwrap_or("");
-                if !lit_value.to_lowercase().contains(&q.to_lowercase()) {
-                    continue;
-                }
             }
             row.module_iri = Some(self.spec().module_iri.clone());
             row.rank = Some((i + 1) as i32);

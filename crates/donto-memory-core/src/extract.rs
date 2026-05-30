@@ -278,7 +278,10 @@ impl MemoryExtractor {
         let base_url = settings.llm_base_url.clone()?;
         let api_key = settings.llm_api_key.clone()?;
         let http = Client::builder()
-            .timeout(Duration::from_secs(180))
+            // 15-minute timeout per LLM call. Deep-mode passes 5+ have
+            // a 5-10KB prior_facts_block which makes GLM-5 slow (often
+            // 3-7 min). Previously 180s, which truncated every pass.
+            .timeout(Duration::from_secs(900))
             .user_agent(concat!("donto-memory/", env!("CARGO_PKG_VERSION")))
             .build()
             .ok()?;
