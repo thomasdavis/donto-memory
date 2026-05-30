@@ -211,10 +211,18 @@ pub async fn memorize(
                     ..Default::default()
                 }
             };
+            // Distinct label for failed async completions so /jobs
+            // surfaces them at a glance instead of mixing 4xx/5xx
+            // into the same column as the 200 successes.
+            let endpoint_label = if status_code < 400 {
+                "POST /memorize (async)"
+            } else {
+                "POST /memorize (async-failed)"
+            };
             job_log::record_job(
                 &s_async.pool,
                 &s_async.settings.consumer_iri,
-                "POST /memorize (async)",
+                endpoint_label,
                 Some(&req.holder),
                 req.session_id.as_deref(),
                 status_code,
