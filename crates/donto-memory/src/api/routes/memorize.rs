@@ -54,6 +54,14 @@ pub struct MemorizeReq {
     /// to [1, 10]. Defaults to 3 when omitted.
     #[serde(default)]
     pub passes: Option<u32>,
+    /// If true, the route returns 202 immediately after the episodic
+    /// chunk is stored and runs LLM extraction in a background tokio
+    /// task. If false, the route waits for extraction to finish (the
+    /// original behaviour). If omitted, defaults to true for slow
+    /// modes (`deep`, `exhaustive`) and false for `single` — so
+    /// caller-side timeouts don't trip on multi-minute extractions.
+    #[serde(default, rename = "async")]
+    pub r#async: Option<bool>,
     /// Optional images to attach. Each entry is either an http(s)
     /// URL the LLM provider can fetch, or a `data:image/png;base64,…`
     /// data URL with the bytes inline. When non-empty, the extractor
@@ -119,6 +127,22 @@ fn redact_images(mut req: Value) -> Value {
     req
 }
 
+/// Decide whether this request should be processed asynchronously. If
+/// `async` is set explicitly, that wins. Otherwise slow modes
+/// (deep / exhaustive) default to async so callers don't trip over
+/// HTTP timeouts (Cloudflare's 100s, axum default, etc.). Single mode
+/// stays sync — it's fast enough.
+fn should_defer(req: &MemorizeReq, default_mode: &str) -> bool {
+    if let Some(b) = req.r#async {
+        return b;
+    }
+    let mode = req.mode.as_deref().unwrap_or(default_mode).to_lowercase();
+    matches!(
+        mode.as_str(),
+        "deep" | "sequential" | "iterative" | "exhaustive" | "multi" | "apertures"
+    )
+}
+
 pub async fn memorize(
     State(s): State<Arc<AppState>>,
     JsonReq(req): JsonReq<MemorizeReq>,
@@ -129,6 +153,82 @@ pub async fn memorize(
     // rate this would fill the job log table fast. Keep only a
     // truncated preview + a count.
     let request_json = redact_images(serde_json::to_value(&req).unwrap_or_else(|_| json!({})));
+
+    if should_defer(&req, &s.settings.extract_mode) {
+        // Async path: episodic + extraction happen in a spawned tokio
+        // task so the HTTP request can return immediately. The task
+        // writes its own job_log row when it finishes. We log a
+        // "queued" audit row right now so the /jobs page surfaces the
+        // pending work and callers know their request was accepted.
+        let queue_id = Uuid::new_v4();
+        let queued_resp = json!({
+            "status": "queued",
+            "queue_id": queue_id,
+            "holder": req.holder,
+            "session_id": req.session_id,
+            "extract_mode": req.mode.clone().unwrap_or_else(|| s.settings.extract_mode.clone()),
+            "passes": req.passes,
+            "note": "extraction running in the background. Poll /recall or /jobs for results.",
+        });
+        // The "queued" audit row lets the /jobs list show the work as
+        // accepted-but-pending while the background task is still
+        // grinding through LLM calls.
+        let s_async = Arc::clone(&s);
+        let request_async = request_json.clone();
+        let resp_for_log = queued_resp.clone();
+        job_log::record_job(
+            &s.pool,
+            &s.settings.consumer_iri,
+            "POST /memorize (queued)",
+            Some(&req.holder),
+            req.session_id.as_deref(),
+            202,
+            started.elapsed().as_millis() as u64,
+            &request_json,
+            &resp_for_log,
+            job_log::JobMetrics::default(),
+        )
+        .await;
+
+        tokio::spawn(async move {
+            // Serialize background memorize tasks — one at a time.
+            // The user explicitly asked for serial extraction so
+            // multiple Discord messages don't trample on each other or
+            // stack up parallel LLM calls.
+            let _guard = s_async.async_memorize_lock.lock().await;
+            let task_started = std::time::Instant::now();
+            let (status_code, resp_json) = match memorize_one(&s_async, &req).await {
+                Ok(resp) => (200u16, serde_json::to_value(&resp).unwrap_or_else(|_| json!({}))),
+                Err(MemorizeError::BadInput(msg)) => (400u16, json!({"error": msg})),
+                Err(other) => (500u16, json!({"error": other.to_string()})),
+            };
+            let elapsed_ms = task_started.elapsed().as_millis() as u64;
+            let metrics = if status_code < 400 {
+                job_log::metrics_from_memorize(&resp_json)
+            } else {
+                job_log::JobMetrics {
+                    error: resp_json.get("error").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                    ..Default::default()
+                }
+            };
+            job_log::record_job(
+                &s_async.pool,
+                &s_async.settings.consumer_iri,
+                "POST /memorize (async)",
+                Some(&req.holder),
+                req.session_id.as_deref(),
+                status_code,
+                elapsed_ms,
+                &request_async,
+                &resp_json,
+                metrics,
+            )
+            .await;
+        });
+
+        return (StatusCode::ACCEPTED, Json(queued_resp)).into_response();
+    }
+
     let (status_code, resp_json) = match memorize_one(&s, &req).await {
         Ok(resp) => (200u16, serde_json::to_value(&resp).unwrap_or_else(|_| json!({}))),
         Err(MemorizeError::BadInput(msg)) => (400u16, json!({"error": msg})),

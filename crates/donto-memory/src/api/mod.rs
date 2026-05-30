@@ -28,6 +28,10 @@ pub struct AppState {
     pub settings: Settings,
     pub substrate: SubstrateClient,
     pub pool: Pool,
+    /// Serializes background memorize-extraction tasks so only one
+    /// runs at a time. Synchronous /memorize calls and other endpoints
+    /// are not affected.
+    pub async_memorize_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 pub fn router(state: AppState) -> Router {

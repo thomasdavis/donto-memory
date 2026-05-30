@@ -123,6 +123,7 @@ async fn api(bind: Option<String>) -> Result<()> {
         settings: settings.clone(),
         substrate: substrate.clone(),
         pool,
+        async_memorize_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
     });
 
     let listener = tokio::net::TcpListener::bind(&settings.api_bind).await?;
