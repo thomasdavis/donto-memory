@@ -14,6 +14,7 @@ use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
 mod docs;
+pub mod extract;
 pub mod job_log;
 mod openapi;
 mod routes;

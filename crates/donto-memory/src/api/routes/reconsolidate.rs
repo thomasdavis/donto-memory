@@ -8,6 +8,7 @@ use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
 
+use crate::api::extract::JsonReq;
 use crate::api::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -34,7 +35,7 @@ fn default_limit() -> i64 {
 
 pub async fn enqueue(
     State(s): State<Arc<AppState>>,
-    Json(req): Json<EnqueueReq>,
+    JsonReq(req): JsonReq<EnqueueReq>,
 ) -> impl IntoResponse {
     let requested_at = Utc::now();
     match overlays::get_record(&s.pool, req.record_id).await {

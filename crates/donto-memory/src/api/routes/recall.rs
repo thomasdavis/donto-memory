@@ -6,19 +6,24 @@ use donto_memory_core::module::register_default_modules;
 use donto_memory_core::types::RecallQuery;
 use serde_json::{json, Value};
 
+use crate::api::extract::JsonReq;
 use crate::api::job_log;
 use crate::api::AppState;
 
 pub async fn recall(
     State(s): State<Arc<AppState>>,
-    Json(mut query): Json<RecallQuery>,
+    JsonReq(mut query): JsonReq<RecallQuery>,
 ) -> impl IntoResponse {
     let started = std::time::Instant::now();
     let request_json = serde_json::to_value(&query).unwrap_or_else(|_| json!({}));
     let holder = query.holder.clone();
     let session_id = query.session_id.clone();
 
-    if query.limit > s.settings.recall_max_limit {
+    // Clamp on both sides: negative or zero limits are nonsense, and
+    // values above the configured ceiling get capped.
+    if query.limit < 1 {
+        query.limit = 1;
+    } else if query.limit > s.settings.recall_max_limit {
         query.limit = s.settings.recall_max_limit;
     }
     let reg = register_default_modules();

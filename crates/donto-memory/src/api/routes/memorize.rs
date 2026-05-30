@@ -21,6 +21,7 @@ use serde_json::{json, Value};
 use tracing::warn;
 use uuid::Uuid;
 
+use crate::api::extract::JsonReq;
 use crate::api::job_log;
 use crate::api::AppState;
 
@@ -84,7 +85,7 @@ fn default_true() -> bool {
 
 pub async fn memorize(
     State(s): State<Arc<AppState>>,
-    Json(req): Json<MemorizeReq>,
+    JsonReq(req): JsonReq<MemorizeReq>,
 ) -> impl IntoResponse {
     let started = std::time::Instant::now();
     let request_json = serde_json::to_value(&req).unwrap_or_else(|_| json!({}));
@@ -125,7 +126,7 @@ pub async fn memorize(
 
 pub async fn memorize_batch(
     State(s): State<Arc<AppState>>,
-    Json(req): Json<MemorizeBatchReq>,
+    JsonReq(req): JsonReq<MemorizeBatchReq>,
 ) -> impl IntoResponse {
     let started = std::time::Instant::now();
     let request_json = serde_json::to_value(&req).unwrap_or_else(|_| json!({}));

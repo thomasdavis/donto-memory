@@ -322,6 +322,98 @@ pub fn document() -> Value {
                     "summary": "Swagger UI rendering of /openapi.json",
                     "responses": { "200": { "description": "HTML" } }
                 }
+            },
+            "/agent.md": {
+                "get": {
+                    "tags": ["system"],
+                    "summary": "Agent-facing markdown guide",
+                    "description": "Comprehensive contract guide aimed at AI agents implementing memory storage and recall. Served as text/markdown.",
+                    "responses": { "200": { "description": "markdown", "content": { "text/markdown": {} } } }
+                }
+            },
+            "/llms.txt": {
+                "get": {
+                    "tags": ["system"],
+                    "summary": "Same content as /agent.md, plain text",
+                    "description": "Follows the llms.txt convention for AI-agent site documentation. Identical body to /agent.md but served as text/plain.",
+                    "responses": { "200": { "description": "plain text", "content": { "text/plain": {} } } }
+                }
+            },
+            "/jobs": {
+                "get": {
+                    "tags": ["system"],
+                    "summary": "HTML observability page (job history)",
+                    "description": "Browseable list of every /memorize, /recall, and /ingest call with full request/response bodies. Filter via the `endpoint` and `holder` query parameters.",
+                    "parameters": [
+                        { "name": "endpoint", "in": "query", "schema": {"type": "string"}, "description": "Substring filter on the endpoint label." },
+                        { "name": "holder", "in": "query", "schema": {"type": "string"}, "description": "Exact-match filter on the holder IRI." },
+                        { "name": "limit", "in": "query", "schema": {"type": "integer", "default": 100}, "description": "Max rows to return (1..1000)." }
+                    ],
+                    "responses": { "200": { "description": "HTML" } }
+                }
+            },
+            "/jobs/list.json": {
+                "get": {
+                    "tags": ["system"],
+                    "summary": "JSON list view of recent jobs",
+                    "description": "Programmatic equivalent of GET /jobs. Same query params; returns `{count, jobs[]}`.",
+                    "parameters": [
+                        { "name": "endpoint", "in": "query", "schema": {"type": "string"} },
+                        { "name": "holder", "in": "query", "schema": {"type": "string"} },
+                        { "name": "limit", "in": "query", "schema": {"type": "integer", "default": 100} }
+                    ],
+                    "responses": {
+                        "200": {
+                            "description": "OK",
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "count": {"type": "integer"},
+                                            "jobs": {"type": "array", "items": {"$ref": "#/components/schemas/JobRow"}}
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "/jobs/{id}": {
+                "get": {
+                    "tags": ["system"],
+                    "summary": "HTML detail for a single job",
+                    "description": "Per-job page showing the full request/response. For /memorize jobs, also renders every extracted fact as a sortable table.",
+                    "parameters": [
+                        { "name": "id", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"} }
+                    ],
+                    "responses": {
+                        "200": { "description": "HTML" },
+                        "400": { "description": "Invalid UUID" },
+                        "404": { "description": "Job not found" }
+                    }
+                }
+            },
+            "/jobs/{id}/raw": {
+                "get": {
+                    "tags": ["system"],
+                    "summary": "Raw JSON for a single job",
+                    "parameters": [
+                        { "name": "id", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"} }
+                    ],
+                    "responses": {
+                        "200": {
+                            "description": "OK",
+                            "content": {
+                                "application/json": {
+                                    "schema": {"$ref": "#/components/schemas/JobDetail"}
+                                }
+                            }
+                        },
+                        "404": { "description": "Job not found" }
+                    }
+                }
             }
         },
         "components": {
@@ -419,6 +511,39 @@ pub fn document() -> Value {
                         "score":             { "type": "number", "nullable": true },
                         "rank":              { "type": "integer", "nullable": true }
                     }
+                },
+                "JobRow": {
+                    "type": "object",
+                    "description": "One audit-log row as returned by /jobs/list.json.",
+                    "properties": {
+                        "job_id":          { "type": "string", "format": "uuid" },
+                        "created_at":      { "type": "string", "format": "date-time" },
+                        "endpoint":        { "type": "string", "example": "POST /memorize" },
+                        "holder":          { "type": "string", "nullable": true },
+                        "session_id":      { "type": "string", "nullable": true },
+                        "status_code":     { "type": "integer", "example": 200 },
+                        "elapsed_ms":      { "type": "integer" },
+                        "facts_extracted": { "type": "integer", "nullable": true },
+                        "facts_ingested":  { "type": "integer", "nullable": true },
+                        "rows_returned":   { "type": "integer", "nullable": true },
+                        "model":           { "type": "string", "nullable": true },
+                        "total_tokens":    { "type": "integer", "nullable": true },
+                        "error":           { "type": "string", "nullable": true }
+                    }
+                },
+                "JobDetail": {
+                    "allOf": [
+                        { "$ref": "#/components/schemas/JobRow" },
+                        {
+                            "type": "object",
+                            "properties": {
+                                "request":           { "type": "object", "description": "Full request body that was POSTed." },
+                                "response":         { "type": "object", "description": "Full response body returned to the caller." },
+                                "prompt_tokens":     { "type": "integer", "nullable": true },
+                                "completion_tokens": { "type": "integer", "nullable": true }
+                            }
+                        }
+                    ]
                 }
             }
         }
