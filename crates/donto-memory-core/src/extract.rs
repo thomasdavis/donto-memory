@@ -441,15 +441,36 @@ impl MemoryExtractor {
             .cloned()
             .ok_or_else(|| ExtractError::Decode("no message content".into()))?;
         let stripped = strip_markdown_code_fence(&content);
-        let parsed: FactsEnvelope = serde_json::from_str(&stripped).map_err(|e| {
-            warn!(
-                aperture = aperture_id,
-                error = %e,
-                raw = &stripped[..stripped.len().min(400)],
-                "LLM returned non-JSON"
-            );
-            ExtractError::Decode(format!("not valid JSON: {e}"))
-        })?;
+        // First attempt: parse as-is. Most calls land here.
+        let parsed: FactsEnvelope = match serde_json::from_str(&stripped) {
+            Ok(env) => env,
+            Err(first_err) => {
+                // The model frequently truncates mid-string when it runs
+                // out of max_tokens. Salvage the prefix: walk forward to
+                // find the `"facts": [`, then peel off complete `{…}`
+                // objects until we hit something that won't parse.
+                let recovered = recover_truncated_facts(&stripped);
+                if !recovered.is_empty() {
+                    warn!(
+                        aperture = aperture_id,
+                        recovered = recovered.len(),
+                        first_error = %first_err,
+                        "LLM JSON truncated; recovered partial facts"
+                    );
+                    FactsEnvelope { facts: recovered }
+                } else {
+                    warn!(
+                        aperture = aperture_id,
+                        error = %first_err,
+                        raw = &stripped[..stripped.len().min(400)],
+                        "LLM returned non-JSON, no salvage"
+                    );
+                    return Err(ExtractError::Decode(format!(
+                        "not valid JSON: {first_err}"
+                    )));
+                }
+            }
+        };
         Ok(OneCallResult {
             model: chat.model.unwrap_or_else(|| self.model.clone()),
             raw_count: parsed.facts.len() as u32,
@@ -607,6 +628,75 @@ struct FactsEnvelope {
     facts: Vec<ExtractedFact>,
 }
 
+/// Salvage extracted facts from a JSON response truncated mid-string
+/// (the EOF-mid-string error reasoning models produce when they
+/// exhaust max_tokens).
+///
+/// Strategy: find `"facts"` array opening `[`, then walk the body
+/// pulling out complete `{…}` objects via brace+string-aware
+/// bracket-matching. Stop at the first object that doesn't parse.
+/// Returns whatever prefix of valid facts we got — usually 90+% of
+/// what the model intended.
+fn recover_truncated_facts(raw: &str) -> Vec<ExtractedFact> {
+    // Locate the array start. The model is told to emit `{"facts":[…]}`
+    // so the array key is always `facts`.
+    let array_start = match raw.find("\"facts\"").and_then(|i| raw[i..].find('[').map(|j| i + j)) {
+        Some(p) => p + 1, // position after `[`
+        None => return Vec::new(),
+    };
+    let bytes = raw.as_bytes();
+    let mut out = Vec::new();
+    let mut i = array_start;
+    while i < bytes.len() {
+        // Skip whitespace + commas.
+        while i < bytes.len() && (bytes[i].is_ascii_whitespace() || bytes[i] == b',') {
+            i += 1;
+        }
+        if i >= bytes.len() || bytes[i] != b'{' {
+            break;
+        }
+        let obj_start = i;
+        // Walk forward tracking string vs structural context until the
+        // matching brace closes.
+        let mut depth = 0i32;
+        let mut in_string = false;
+        let mut escape = false;
+        while i < bytes.len() {
+            let c = bytes[i];
+            if in_string {
+                if escape {
+                    escape = false;
+                } else if c == b'\\' {
+                    escape = true;
+                } else if c == b'"' {
+                    in_string = false;
+                }
+            } else if c == b'"' {
+                in_string = true;
+            } else if c == b'{' {
+                depth += 1;
+            } else if c == b'}' {
+                depth -= 1;
+                if depth == 0 {
+                    i += 1;
+                    break;
+                }
+            }
+            i += 1;
+        }
+        if depth != 0 {
+            // Object was truncated mid-stream. We're done.
+            break;
+        }
+        let slice = &raw[obj_start..i];
+        match serde_json::from_str::<ExtractedFact>(slice) {
+            Ok(f) => out.push(f),
+            Err(_) => break,
+        }
+    }
+    out
+}
+
 fn strip_markdown_code_fence(s: &str) -> String {
     let trimmed = s.trim();
     let body = if let Some(rest) = trimmed.strip_prefix("```json") {
@@ -712,6 +802,51 @@ mod tests {
         }"#;
         let f: ExtractedFact = serde_json::from_str(raw).unwrap();
         assert_eq!(f.hypothesis_only, Some(true));
+    }
+
+    /// Salvage facts from a truncated LLM JSON response. This is the
+    /// EOF-mid-string failure reported in the live job log on
+    /// 2026-05-30: the model produced ~150 lines of valid facts then
+    /// got cut off mid-value on the last one. We must recover the
+    /// prefix.
+    #[test]
+    fn recovers_truncated_facts_at_end_of_array() {
+        let raw = r#"{
+            "facts": [
+                {"subject":"ex:a","predicate":"ex:p","object_iri":"ex:o1"},
+                {"subject":"ex:b","predicate":"ex:p","object_iri":"ex:o2"},
+                {"subject":"ex:c","predicate":"ex:p","object_iri":"ex:THIS_IS_TRU"#;
+        let out = recover_truncated_facts(raw);
+        assert_eq!(out.len(), 2, "expected 2 salvageable facts; got {:?}", out);
+        assert_eq!(out[0].subject, "ex:a");
+        assert_eq!(out[1].subject, "ex:b");
+    }
+
+    /// A truncation in the middle of a string value mid-object must
+    /// not produce a half-fact. Stop at the last complete `}`.
+    #[test]
+    fn recovers_handles_truncated_value() {
+        let raw = r#"{"facts":[{"subject":"ex:a","predicate":"ex:p","object_lit":{"v":"unter"#;
+        let out = recover_truncated_facts(raw);
+        assert!(out.is_empty(), "no complete fact yet → must be empty");
+    }
+
+    /// Nested braces inside a value must not confuse the matcher.
+    #[test]
+    fn recovers_handles_nested_braces() {
+        let raw = r#"{"facts":[{"subject":"ex:a","predicate":"ex:p","object_lit":{"v":1,"dt":"xsd:integer"}},{"subject":"ex:b","predicate":"ex:p","object_lit":{"v":"incomplete"#;
+        let out = recover_truncated_facts(raw);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].subject, "ex:a");
+    }
+
+    /// Strings with escaped quotes must not break the matcher.
+    #[test]
+    fn recovers_handles_escaped_quotes() {
+        let raw = r#"{"facts":[{"subject":"ex:a","predicate":"ex:p","object_lit":{"v":"he said \"hi\""}},{"subject":"ex:trun"#;
+        let out = recover_truncated_facts(raw);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].subject, "ex:a");
     }
 
     /// Confidence sometimes comes back as a string. Same justification.
