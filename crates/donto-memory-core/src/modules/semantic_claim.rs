@@ -164,8 +164,23 @@ impl MemoryModule for SemanticClaimModule {
             )
             .await?;
 
+        // Holder-isolation filter — same justification as episodic.
+        // For semantic-claim the overlay record's root_statement
+        // matches the substrate row's statement_id.
+        let owned: std::collections::HashSet<uuid::Uuid> =
+            overlays::list_root_statements_for_holder(
+                pool,
+                &query.holder,
+                &self.spec().module_iri,
+                query.session_id.as_deref(),
+            )
+            .await?;
+
         let mut out = Vec::new();
         for (i, mut row) in resp.rows.into_iter().enumerate() {
+            if !owned.contains(&row.statement_id) {
+                continue;
+            }
             if let Some(q) = &query.query {
                 let q_lower = q.to_lowercase();
                 let hay_subject = row.subject.to_lowercase();

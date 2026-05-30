@@ -187,8 +187,27 @@ impl MemoryModule for EpisodicModule {
             )
             .await?;
 
+        // Holder-isolation filter: the substrate scopes by context,
+        // which can be shared across holders (e.g. two agents
+        // writing to the same `discord:channel:X` session). Without
+        // this allowlist a recall by holder A would see holder B's
+        // chunks. The record's subject is the chunk's context IRI,
+        // which equals the record_iri we store on
+        // donto_x_memory_record.
+        let owned: std::collections::HashSet<String> =
+            overlays::list_record_iris_for_holder(
+                pool,
+                &query.holder,
+                &self.spec().module_iri,
+                query.session_id.as_deref(),
+            )
+            .await?;
+
         let mut out = Vec::new();
         for (i, mut row) in resp.rows.into_iter().enumerate() {
+            if !owned.contains(&row.subject) {
+                continue;
+            }
             if let Some(q) = &query.query {
                 let lit_value = row
                     .object_lit

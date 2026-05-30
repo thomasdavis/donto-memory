@@ -250,6 +250,74 @@ pub async fn get_record(
     Ok(row.map(record_from_row))
 }
 
+/// Enumerate `root_statement` UUIDs owned by a holder under a
+/// module — used by semantic-claim retrieve to filter rows by
+/// statement_id (the substrate scope alone leaks across holders
+/// who share a session).
+pub async fn list_root_statements_for_holder(
+    pool: &Pool,
+    holder_iri: &str,
+    module_iri: &str,
+    session_iri: Option<&str>,
+) -> Result<std::collections::HashSet<Uuid>, OverlayError> {
+    let c = pool.get().await?;
+    let rows = match session_iri {
+        Some(s) => {
+            c.query(
+                "select root_statement from donto_x_memory_record
+                  where holder_iri = $1 and module_iri = $2 and session_iri = $3
+                    and root_statement is not null",
+                &[&holder_iri, &module_iri, &s],
+            )
+            .await?
+        }
+        None => {
+            c.query(
+                "select root_statement from donto_x_memory_record
+                  where holder_iri = $1 and module_iri = $2
+                    and root_statement is not null",
+                &[&holder_iri, &module_iri],
+            )
+            .await?
+        }
+    };
+    Ok(rows.into_iter().map(|r| r.get::<_, Uuid>(0)).collect())
+}
+
+/// Enumerate `record_iri` values owned by a holder under a given
+/// module — optionally narrowed to a session. Returns a set the
+/// caller can use as a "row belongs to me" filter after a substrate
+/// recall (the substrate scopes by context, which can be shared
+/// across holders, so we need an overlay-side allowlist to prevent
+/// cross-holder leakage).
+pub async fn list_record_iris_for_holder(
+    pool: &Pool,
+    holder_iri: &str,
+    module_iri: &str,
+    session_iri: Option<&str>,
+) -> Result<std::collections::HashSet<String>, OverlayError> {
+    let c = pool.get().await?;
+    let rows = match session_iri {
+        Some(s) => {
+            c.query(
+                "select record_iri from donto_x_memory_record
+                  where holder_iri = $1 and module_iri = $2 and session_iri = $3",
+                &[&holder_iri, &module_iri, &s],
+            )
+            .await?
+        }
+        None => {
+            c.query(
+                "select record_iri from donto_x_memory_record
+                  where holder_iri = $1 and module_iri = $2",
+                &[&holder_iri, &module_iri],
+            )
+            .await?
+        }
+    };
+    Ok(rows.into_iter().map(|r| r.get::<_, String>(0)).collect())
+}
+
 /// Enumerate distinct session IRIs known for a holder + module
 /// combination. Used by module retrieve() to expand a holder-only
 /// recall into an explicit `include: [...]` of all known session
