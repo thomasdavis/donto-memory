@@ -164,6 +164,11 @@ async fn integration_patterns_md(req: Request) -> Response {
 async fn api_summary(
     State(state): State<Arc<AppState>>,
 ) -> axum::Json<serde_json::Value> {
+    // Live queue snapshot — operators use this to drain-before-restart
+    // without writing the multi-CTE SQL by hand. Best-effort: on DB
+    // error we surface a null instead of failing the whole summary.
+    let async_queue = fetch_async_queue_snapshot(&state.pool).await;
+
     axum::Json(serde_json::json!({
         "service": "donto-memory",
         "version": env!("CARGO_PKG_VERSION"),
@@ -203,5 +208,71 @@ async fn api_summary(
             ]
         },
         "ops_token_required": state.settings.ops_token.is_some(),
+        "async_memorize_queue": async_queue,
     }))
+}
+
+/// Snapshot of the async-memorize queue health for the /api summary.
+/// Lets an operator drain-before-restart with a single
+/// `curl /api | jq .async_memorize_queue.pending` instead of running
+/// the multi-CTE SQL by hand.
+async fn fetch_async_queue_snapshot(pool: &deadpool_postgres::Pool) -> serde_json::Value {
+    let Ok(c) = pool.get().await else {
+        return serde_json::Value::Null;
+    };
+    let row = c
+        .query_one(
+            "with queued as (
+               select response->>'queue_id' as q, created_at, holder
+               from donto_x_memory_job_log
+               where endpoint = 'POST /memorize (queued)'
+             ),
+             completed as (
+               select response->>'queue_id' as q
+               from donto_x_memory_job_log
+               where endpoint like 'POST /memorize (async%'
+             ),
+             lost as (
+               select response->>'orphaned_queue_id' as q
+               from donto_x_memory_job_log
+               where endpoint = 'POST /memorize (lost)'
+             ),
+             pending as (
+               select q.q, q.created_at, q.holder
+               from queued q
+               left join completed c on q.q = c.q
+               left join lost    l on q.q = l.q
+               where c.q is null and l.q is null
+             )
+             select
+               (select count(*) from pending)::bigint as pending,
+               (select extract(epoch from (now() - min(created_at)))
+                  from pending)::bigint as oldest_pending_age_seconds,
+               (select count(*) from donto_x_memory_job_log
+                  where endpoint = 'POST /memorize (async)'
+                    and created_at > now() - interval '24 hours')::bigint as completed_24h,
+               (select count(*) from donto_x_memory_job_log
+                  where endpoint = 'POST /memorize (async-failed)'
+                    and created_at > now() - interval '24 hours')::bigint as failed_24h,
+               (select count(*) from donto_x_memory_job_log
+                  where endpoint = 'POST /memorize (lost)'
+                    and created_at > now() - interval '24 hours')::bigint as lost_24h",
+            &[],
+        )
+        .await;
+    match row {
+        Ok(r) => {
+            let pending: i64 = r.get("pending");
+            let age: Option<i64> = r.try_get("oldest_pending_age_seconds").ok();
+            serde_json::json!({
+                "pending":                    pending,
+                "oldest_pending_age_seconds": age,
+                "completed_24h":              r.get::<_, i64>("completed_24h"),
+                "failed_24h":                 r.get::<_, i64>("failed_24h"),
+                "lost_24h":                   r.get::<_, i64>("lost_24h"),
+                "drain_safe":                 pending == 0,
+            })
+        }
+        Err(_) => serde_json::Value::Null,
+    }
 }
