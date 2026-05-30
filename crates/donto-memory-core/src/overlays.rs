@@ -18,12 +18,34 @@ use crate::types::{AccessKind, MemoryRecord, MemoryRecordRef};
 
 #[derive(Debug, Error)]
 pub enum OverlayError {
+    /// Wrap tokio-postgres errors with the full DB-side detail
+    /// (severity / code / message / hint). The default
+    /// `tokio_postgres::Error`'s `Display` impl returns only the
+    /// useless string "db error" for any error originating from the
+    /// server — losing the SQLSTATE and the message.
     #[error("postgres: {0}")]
-    Postgres(#[from] tokio_postgres::Error),
+    Postgres(String),
     #[error("pool: {0}")]
     Pool(#[from] deadpool_postgres::PoolError),
     #[error("config: {0}")]
     Config(String),
+}
+
+impl From<tokio_postgres::Error> for OverlayError {
+    fn from(e: tokio_postgres::Error) -> Self {
+        if let Some(db) = e.as_db_error() {
+            OverlayError::Postgres(format!(
+                "{severity} {code}: {message}{detail}{hint}",
+                severity = db.severity(),
+                code = db.code().code(),
+                message = db.message(),
+                detail = db.detail().map(|d| format!(" — {d}")).unwrap_or_default(),
+                hint = db.hint().map(|h| format!(" (hint: {h})")).unwrap_or_default(),
+            ))
+        } else {
+            OverlayError::Postgres(e.to_string())
+        }
+    }
 }
 
 /// Build a deadpool_postgres pool from a DSN string.
@@ -177,12 +199,20 @@ pub async fn create_record(
     metadata: &serde_json::Value,
 ) -> Result<Uuid, OverlayError> {
     let c = pool.get().await?;
+    // The substrate dedups identical triples by content_hash, so an
+    // ingest of an existing (subject, predicate, object) returns the
+    // pre-existing statement_id. We then build the same record_iri,
+    // which would violate the unique constraint. ON CONFLICT lets
+    // both fresh inserts and repeat-ingest return the same record_id
+    // — the second path picks up the row already there.
     let row = c
         .query_one(
             "insert into donto_x_memory_record \
                  (record_iri, module_iri, root_statement, root_frame, root_context, \
                   holder_iri, session_iri, expected_policy_iri, metadata) \
              values ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+             on conflict (record_iri) do update set \
+                 metadata = donto_x_memory_record.metadata || excluded.metadata \
              returning record_id",
             &[
                 &record_iri,
@@ -534,7 +564,7 @@ pub async fn register_overlays(
                 if msg.contains("already registered") {
                     tracing::info!(overlay = iri, "already registered");
                 } else {
-                    return Err(OverlayError::Postgres(e));
+                    return Err(OverlayError::from(e));
                 }
             }
         }
