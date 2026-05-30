@@ -910,13 +910,25 @@ fn format_prior_facts_block(facts: &[ExtractedFact]) -> String {
     let mut s = String::with_capacity(facts.len() * 80);
     s.push_str(
         "Earlier passes over this same chunk already extracted the facts below. \
-Do NOT repeat them. Instead, find genuinely new angles: deeper inferences, \
-unstated assumptions, additional entities, alternate framings, finer-grained \
-properties, temporal/spatial nuance, causal links, contrastive readings, \
-metalinguistic facts about the utterance itself, or anything else you would \
-not have produced in a single pass. Be as thorough as before — aim to add \
-20+ new facts. If the chunk genuinely has no more facts to extract, return \
-{\"facts\": []}.\n\nALREADY EXTRACTED (subject | predicate | object):\n",
+Your job in this pass is to find EVERY remaining fact the previous passes missed. \
+Do NOT repeat anything in the list — content-hash dedup will drop repeats anyway, \
+so your job is pure novelty. Push harder: deeper inferences, unstated assumptions, \
+additional entities (including abstract/conceptual ones, time/place anchors, \
+counterfactuals), alternate framings, finer-grained properties, temporal and \
+spatial nuance, causal and dependency links, contrastive readings, parts of named \
+entities, generic-class facts (\"X is a Y\", \"Y has property Z\"), metalinguistic \
+facts about the utterance itself (sentence count, mood, register, sentiment, \
+politeness, addressee, speech act), pragmatic implicatures, conventional \
+implicatures, scalar implicatures, conversational maxims, intent, plan, \
+prerequisite, consequence, related concepts in the same domain, related \
+practitioners, related tools/standards/formats, the user's evident expertise level, \
+the user's evident emotional state, the user's evident workflow, the user's \
+evident dependencies, the user's evident substitutes-avoided, the user's evident \
+counterfactual world (\"would be lost without X\"), domain knowledge implied. \
+Aim for 30-60+ NEW facts in this pass. Repeat content will be dropped — your \
+incentive is breadth + novelty. Only return {\"facts\": []} if you genuinely \
+cannot think of one more angle.\n\nALREADY EXTRACTED (subject | predicate | \
+object):\n",
     );
     for fact in &facts[start..] {
         let obj = match (&fact.object_iri, &fact.object_lit) {
