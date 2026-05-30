@@ -25,6 +25,7 @@ pub async fn run_worker(
         hostname::get().unwrap_or_default().to_string_lossy()
     );
     info!(worker_id = %worker_id, "sleep worker starting");
+    let mut last_prune = std::time::Instant::now() - Duration::from_secs(86_400);
     loop {
         let items = overlays::claim_next_batch(
             pool,
@@ -34,6 +35,15 @@ pub async fn run_worker(
         )
         .await?;
         if items.is_empty() {
+            // Idle tick is a good moment to run the once-a-day prune.
+            if settings.job_log_retention_days > 0
+                && last_prune.elapsed() >= Duration::from_secs(3600)
+            {
+                if let Err(e) = prune_job_log(pool, settings.job_log_retention_days).await {
+                    warn!(error = %e, "job-log prune failed");
+                }
+                last_prune = std::time::Instant::now();
+            }
             if stop_after_one_pass {
                 return Ok(());
             }
@@ -50,6 +60,23 @@ pub async fn run_worker(
             return Ok(());
         }
     }
+}
+
+/// Drop audit rows older than `retention_days`. Returns the count
+/// pruned. Idempotent; safe to call at any cadence.
+async fn prune_job_log(pool: &Pool, retention_days: i64) -> Result<u64, overlays::OverlayError> {
+    let c = pool.get().await?;
+    let n = c
+        .execute(
+            "delete from donto_x_memory_job_log
+             where created_at < now() - ($1 || ' days')::interval",
+            &[&retention_days.to_string()],
+        )
+        .await?;
+    if n > 0 {
+        info!(pruned = n, retention_days, "job_log retention pruned");
+    }
+    Ok(n)
 }
 
 async fn process_one(

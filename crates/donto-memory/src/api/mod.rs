@@ -3,16 +3,18 @@
 use std::sync::Arc;
 
 use axum::{
-    http::header,
-    response::{Html, IntoResponse, Response},
+    extract::Request,
+    response::Response,
     routing::{get, post},
     Router,
 };
+use std::sync::OnceLock;
 use deadpool_postgres::Pool;
 use donto_memory_core::{substrate::SubstrateClient, Settings};
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
+mod cache;
 mod docs;
 pub mod extract;
 pub mod job_log;
@@ -54,6 +56,12 @@ pub fn router(state: AppState) -> Router {
         .route("/jobs/list.json", get(routes::jobs::list_json))
         .route("/jobs/:id", get(routes::jobs::detail_html))
         .route("/jobs/:id/raw", get(routes::jobs::detail_json))
+        .route("/explore", get(routes::explore::page))
+        .route("/explore/stats.json", get(routes::explore::stats))
+        .route("/explore/holders.json", get(routes::explore::holders))
+        .route("/explore/sessions.json", get(routes::explore::sessions))
+        .route("/explore/records.json", get(routes::explore::records))
+        .route("/explore/facts.json", get(routes::explore::facts))
         .with_state(state)
         .layer(TraceLayer::new_for_http())
         .layer(
@@ -64,52 +72,72 @@ pub fn router(state: AppState) -> Router {
         )
 }
 
-/// Static homepage. Served as text/html.
-async fn homepage() -> Html<&'static str> {
-    Html(docs::HOMEPAGE)
+/// Static homepage. Served as text/html with ETag + Cache-Control.
+async fn homepage(req: Request) -> Response {
+    static ETAG: OnceLock<String> = OnceLock::new();
+    cache::cacheable(&ETAG, "text/html; charset=utf-8", docs::HOMEPAGE, req.headers())
 }
 
-async fn swagger_ui() -> Html<&'static str> {
-    Html(docs::SWAGGER_HTML)
+async fn swagger_ui(req: Request) -> Response {
+    static ETAG: OnceLock<String> = OnceLock::new();
+    cache::cacheable(
+        &ETAG,
+        "text/html; charset=utf-8",
+        docs::SWAGGER_HTML,
+        req.headers(),
+    )
 }
 
-async fn openapi_doc() -> axum::Json<serde_json::Value> {
-    axum::Json(openapi::document())
+/// OpenAPI doc. Same etag/cache pattern, but the body is generated
+/// at runtime via serde_json so we serialize once into a static
+/// `OnceLock<String>` and reuse.
+async fn openapi_doc(req: Request) -> Response {
+    static BODY: OnceLock<String> = OnceLock::new();
+    static ETAG: OnceLock<String> = OnceLock::new();
+    let body = BODY.get_or_init(|| serde_json::to_string(&openapi::document()).unwrap());
+    // Trick: cacheable expects a `&'static str`, and OnceLock<String>::get
+    // returns &String which derefs to &str. Safe because the OnceLock
+    // contents are never freed.
+    cache::cacheable(&ETAG, "application/json", body.as_str(), req.headers())
 }
 
 /// Markdown guide aimed at AI agents. Served as text/markdown so an
 /// agent fetching the URL can ingest it directly.
-async fn agent_md() -> Response {
-    (
-        [(header::CONTENT_TYPE, "text/markdown; charset=utf-8")],
+async fn agent_md(req: Request) -> Response {
+    static ETAG: OnceLock<String> = OnceLock::new();
+    cache::cacheable(
+        &ETAG,
+        "text/markdown; charset=utf-8",
         docs::AGENT_MD,
+        req.headers(),
     )
-        .into_response()
 }
 
 /// llms.txt convention — same content as /agent.md but at the
 /// canonical "I am an AI; tell me how to use this site" path. Served
 /// as text/plain.
-async fn llms_txt() -> Response {
-    (
-        [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+async fn llms_txt(req: Request) -> Response {
+    static ETAG: OnceLock<String> = OnceLock::new();
+    cache::cacheable(
+        &ETAG,
+        "text/plain; charset=utf-8",
         docs::AGENT_MD,
+        req.headers(),
     )
-        .into_response()
 }
 
 /// Concrete integration-patterns spec aimed at the dev (or AI agent)
 /// wiring an existing conversational backend into donto-memory.
-/// Covers conversation-context shaping, recall-on-prompt, mode
-/// policy, preference shortcuts, source registration for
-/// tombstoning, and ship order.
-async fn integration_patterns_md() -> Response {
-    (
-        [(header::CONTENT_TYPE, "text/markdown; charset=utf-8")],
+async fn integration_patterns_md(req: Request) -> Response {
+    static ETAG: OnceLock<String> = OnceLock::new();
+    cache::cacheable(
+        &ETAG,
+        "text/markdown; charset=utf-8",
         docs::INTEGRATION_PATTERNS_MD,
+        req.headers(),
     )
-        .into_response()
 }
+
 
 /// JSON summary at `/api` (the old `/` payload, kept for programmatic
 /// callers that hit the root expecting JSON).

@@ -47,6 +47,11 @@ pub struct Settings {
     ///   - `exhaustive`  — 5 parallel calls (apertures), ~100+ facts.
     ///                     Slower + ~5× tokens; vastly more thorough.
     pub extract_mode: String,
+
+    /// How many days of audit rows in `donto_x_memory_job_log` to
+    /// keep before the worker prunes them. Default 30. Set to 0 to
+    /// disable pruning entirely.
+    pub job_log_retention_days: i64,
 }
 
 impl Default for Settings {
@@ -71,6 +76,7 @@ impl Default for Settings {
             llm_model: "z-ai/glm-5".to_string(),
             llm_temperature: 0.2,
             extract_mode: "exhaustive".to_string(),
+            job_log_retention_days: 30,
         }
     }
 }
@@ -152,6 +158,11 @@ impl Settings {
         }
         if let Ok(v) = std::env::var("DONTO_MEMORY_EXTRACT_MODE") {
             s.extract_mode = v;
+        }
+        if let Ok(v) = std::env::var("DONTO_MEMORY_JOB_LOG_RETENTION_DAYS") {
+            if let Ok(n) = v.parse() {
+                s.job_log_retention_days = n;
+            }
         }
         s
     }

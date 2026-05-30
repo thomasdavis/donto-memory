@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>explore · donto-memory</title>
+<style>
+  :root {
+    --fg: #1a1a1a; --fg-soft: #4a4a4a; --muted: #6f6f6f;
+    --bg: #fafaf7; --bg-alt: #f4f0e6;
+    --link: #1a4fb5; --rule: #d8d4ca;
+    --code-bg: #f0ece2; --accent: #6b3fb0;
+    --accent-soft: #efeaf5;
+    --green: #2f7d3a; --red: #b53935; --orange: #c46b0a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: ui-monospace, "SF Mono", "Menlo", "Consolas", monospace;
+    font-size: 13px; line-height: 1.5; color: var(--fg);
+    background: var(--bg); margin: 0; padding: 0;
+  }
+  header.site {
+    border-bottom: 1px solid var(--rule); padding: 0.7rem 1.5rem;
+    font-size: 12px; color: var(--muted);
+    display: flex; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem;
+    background: var(--bg); position: sticky; top: 0; z-index: 10;
+  }
+  header.site .links a { color: var(--muted); margin-left: 1rem; }
+  header.site .links a:hover { color: var(--fg); }
+  main { max-width: 1500px; margin: 0 auto; padding: 1.4rem 1.5rem 5rem; }
+  h1 { font-size: 1.6rem; font-weight: 700; margin: 0.3rem 0 0.2rem; }
+  h1 .accent { color: var(--accent); }
+  .lead { color: var(--fg-soft); margin-bottom: 1rem; max-width: 60ch; }
+  a { color: var(--link); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code { background: var(--code-bg); padding: 0.05rem 0.3rem;
+         border-radius: 3px; font-size: 0.95em; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.9em; }
+  th, td { border-bottom: 1px solid var(--rule);
+           padding: 0.3rem 0.5rem 0.3rem 0; text-align: left;
+           vertical-align: top; }
+  th { font-weight: 600; color: var(--fg-soft); }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover td { background: var(--bg-alt); }
+  tbody tr.active td { background: var(--accent-soft); color: var(--accent); }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .stat-row {
+    display: flex; flex-wrap: wrap; gap: 0.6rem; margin-bottom: 1rem;
+  }
+  .stat {
+    background: #fff; border: 1px solid var(--rule);
+    border-radius: 5px; padding: 0.55rem 0.85rem; min-width: 120px;
+  }
+  .stat .v {
+    font-size: 1.4rem; font-weight: 700; color: var(--accent);
+    line-height: 1; font-variant-numeric: tabular-nums;
+  }
+  .stat .l { font-size: 0.72rem; color: var(--muted);
+             text-transform: uppercase; letter-spacing: 0.05em;
+             margin-top: 0.25rem; }
+  .grid {
+    display: grid;
+    grid-template-columns: 280px 320px 1fr;
+    gap: 0.8rem; margin-top: 0.8rem;
+  }
+  @media (max-width: 1100px) {
+    .grid { grid-template-columns: 1fr; }
+  }
+  .pane {
+    border: 1px solid var(--rule); border-radius: 5px;
+    background: #fff; padding: 0.7rem 0.85rem;
+    min-height: 200px; overflow: auto; max-height: 70vh;
+  }
+  .pane h3 {
+    margin: 0 0 0.4rem; font-size: 0.75rem;
+    text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--muted);
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .pane h3 .pill {
+    font-size: 0.7rem; padding: 0.05rem 0.35rem;
+    border-radius: 3px; background: var(--accent-soft); color: var(--accent);
+    font-weight: 600;
+  }
+  .pane .empty {
+    color: var(--muted); font-style: italic; padding: 1rem 0;
+    text-align: center; font-size: 0.85rem;
+  }
+  .search {
+    width: 100%; font: inherit; padding: 0.3rem 0.5rem;
+    border: 1px solid var(--rule); border-radius: 4px;
+    margin-bottom: 0.5rem; background: var(--bg);
+  }
+  .module-pill {
+    display: inline-block; font-size: 0.7em; padding: 0.05rem 0.3rem;
+    border-radius: 3px; background: var(--code-bg); color: var(--muted);
+    margin-right: 0.3rem; vertical-align: 1px;
+  }
+  .module-pill.episodic { background: #e8f1da; color: #3d5d20; }
+  .module-pill.semantic-claim { background: #dee9f6; color: #1a4fb5; }
+  .module-pill.preference { background: #f5e6eb; color: #b53965; }
+  .crumbs {
+    margin: 0.4rem 0; font-size: 0.85rem; color: var(--muted);
+  }
+  .crumbs span { padding: 0 0.3rem; }
+  .crumbs a { color: var(--link); }
+  .crumbs .sep { color: var(--rule); }
+  .meta {
+    color: var(--muted); font-size: 0.78rem;
+  }
+  .fact-row .subj  { color: var(--accent); }
+  .fact-row .pred  { color: var(--link); }
+  .fact-row .obj   { color: var(--green); }
+  .fact-row .lit   { color: var(--orange); }
+  .ago { color: var(--muted); font-size: 0.8em; }
+  details { margin-top: 0.4rem; }
+  details summary { cursor: pointer; color: var(--muted); font-size: 0.85rem; }
+  details pre { background: var(--code-bg); padding: 0.4rem 0.7rem;
+                border-radius: 3px; font-size: 0.78em;
+                white-space: pre-wrap; word-break: break-word;
+                max-height: 200px; overflow: auto; }
+</style>
+</head>
+<body>
+
+<header class="site">
+  <span><strong>memories.apexpots.com</strong> · explore · contract <code>0.1.0-m10</code></span>
+  <span class="links">
+    <a href="/">home</a>
+    <a href="/jobs">jobs</a>
+    <a href="/docs">docs</a>
+    <a href="/agent.md">agent guide</a>
+    <a href="https://github.com/thomasdavis/donto-memory">github</a>
+  </span>
+</header>
+
+<main>
+
+<h1><span class="accent">explore</span> <small style="color:var(--muted);font-size:0.7em;font-weight:400">— every memory under every holder</small></h1>
+<p class="lead">
+  Pick a holder. Pick a session. See the records and every
+  ontological statement the LLM extracted. Three-pane progressive
+  drill-down; all data live from the substrate.
+</p>
+
+<div class="stat-row" id="stats"></div>
+
+<div class="crumbs" id="crumbs">
+  <span><strong>holders</strong></span>
+</div>
+
+<div class="grid">
+  <div class="pane" id="pane-holders">
+    <h3>holders <span class="pill" id="holders-count">…</span></h3>
+    <input type="search" class="search" id="holder-search" placeholder="filter by IRI substring…">
+    <div id="holders-list"><div class="empty">loading…</div></div>
+  </div>
+
+  <div class="pane" id="pane-sessions">
+    <h3>sessions <span class="pill" id="sessions-count">—</span></h3>
+    <div id="sessions-list"><div class="empty">pick a holder →</div></div>
+  </div>
+
+  <div class="pane" id="pane-records">
+    <h3>records &amp; facts <span class="pill" id="records-count">—</span></h3>
+    <div id="records-list"><div class="empty">pick a session →</div></div>
+  </div>
+</div>
+
+<script>
+const $ = (q, el=document) => el.querySelector(q);
+const $$ = (q, el=document) => Array.from(el.querySelectorAll(q));
+
+const state = {
+  holder: null,
+  session: null,
+  module: null,
+  filterQ: '',
+};
+
+function moduleShort(iri) {
+  if (!iri) return '?';
+  return iri.replace(/^mem:module\//, '');
+}
+
+function ago(iso) {
+  if (!iso) return '';
+  const ms = Date.now() - new Date(iso).getTime();
+  if (ms < 60_000) return Math.floor(ms/1000) + 's ago';
+  if (ms < 3_600_000) return Math.floor(ms/60_000) + 'm ago';
+  if (ms < 86_400_000) return Math.floor(ms/3_600_000) + 'h ago';
+  return Math.floor(ms/86_400_000) + 'd ago';
+}
+
+function objSummary(stmt) {
+  if (stmt.object_iri) return `<span class="obj">${esc(stmt.object_iri)}</span>`;
+  if (stmt.object_lit?.v !== undefined) {
+    const v = stmt.object_lit.v;
+    if (typeof v === 'string') return `<span class="lit">"${esc(v)}"</span>`;
+    return `<span class="lit">${esc(String(v))}</span>`;
+  }
+  return '<span class="meta">—</span>';
+}
+
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, c => ({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  }[c]));
+}
+
+async function loadStats() {
+  const r = await fetch('/explore/stats.json').then(r=>r.json());
+  $('#stats').innerHTML = [
+    {v: r.records,       l: 'records'},
+    {v: r.holders,       l: 'holders'},
+    {v: r.sessions,      l: 'sessions'},
+    {v: r.recall_events, l: 'recall events'},
+    {v: r.modules,       l: 'modules'},
+  ].map(s => `<div class="stat"><div class="v">${s.v}</div><div class="l">${s.l}</div></div>`).join('');
+}
+
+async function loadHolders() {
+  const q = state.filterQ ? `?q=${encodeURIComponent(state.filterQ)}` : '';
+  const r = await fetch('/explore/holders.json' + q).then(r=>r.json());
+  $('#holders-count').textContent = r.count;
+  if (r.holders.length === 0) {
+    $('#holders-list').innerHTML = '<div class="empty">none</div>';
+    return;
+  }
+  $('#holders-list').innerHTML = `<table><tbody>${
+    r.holders.map(h => `
+      <tr data-holder="${esc(h.holder)}" class="${h.holder === state.holder ? 'active' : ''}">
+        <td>
+          <div><code>${esc(h.holder)}</code></div>
+          <div class="meta">${h.records} record(s) · ${h.sessions} session(s) · last ${ago(h.last_seen)}</div>
+        </td>
+      </tr>`).join('')
+  }</tbody></table>`;
+  $$('tbody tr', $('#holders-list')).forEach(tr => {
+    tr.addEventListener('click', () => selectHolder(tr.dataset.holder));
+  });
+}
+
+async function selectHolder(holder) {
+  state.holder = holder;
+  state.session = null;
+  state.module = null;
+  updateCrumbs();
+  await Promise.all([loadHolders(), loadSessions()]);
+  $('#records-list').innerHTML = '<div class="empty">pick a session →</div>';
+  $('#records-count').textContent = '—';
+}
+
+async function loadSessions() {
+  if (!state.holder) {
+    $('#sessions-list').innerHTML = '<div class="empty">pick a holder →</div>';
+    $('#sessions-count').textContent = '—';
+    return;
+  }
+  const r = await fetch(`/explore/sessions.json?holder=${encodeURIComponent(state.holder)}`).then(r=>r.json());
+  $('#sessions-count').textContent = r.count;
+  if (r.sessions.length === 0) {
+    $('#sessions-list').innerHTML = '<div class="empty">no sessions</div>';
+    return;
+  }
+  $('#sessions-list').innerHTML = `<table><tbody>${
+    r.sessions.map(s => `
+      <tr data-session="${esc(s.session)}" data-module="${esc(s.module_iri)}"
+          class="${s.session === state.session && s.module_iri === state.module ? 'active' : ''}">
+        <td>
+          <div><span class="module-pill ${esc(moduleShort(s.module_iri))}">${esc(moduleShort(s.module_iri))}</span><code>${esc(s.session)}</code></div>
+          <div class="meta">${s.records} record(s) · last ${ago(s.last_seen)}</div>
+        </td>
+      </tr>`).join('')
+  }</tbody></table>`;
+  $$('tbody tr', $('#sessions-list')).forEach(tr => {
+    tr.addEventListener('click', () =>
+      selectSession(tr.dataset.session, tr.dataset.module));
+  });
+}
+
+async function selectSession(session, module) {
+  state.session = session;
+  state.module = module;
+  updateCrumbs();
+  loadSessions();
+  await loadRecords();
+}
+
+async function loadRecords() {
+  if (!state.holder || !state.session) {
+    $('#records-list').innerHTML = '<div class="empty">pick a session →</div>';
+    return;
+  }
+  const params = new URLSearchParams({holder: state.holder});
+  if (state.session !== '(no session)') params.set('session', state.session);
+  if (state.module) params.set('module', state.module);
+  const r = await fetch(`/explore/records.json?${params}`).then(r=>r.json());
+  $('#records-count').textContent = r.count;
+  if (r.records.length === 0) {
+    $('#records-list').innerHTML = '<div class="empty">no records</div>';
+    return;
+  }
+  const sessionForFacts = state.session === '(no session)' ? null : state.session;
+  $('#records-list').innerHTML = `
+    <div style="margin-bottom:0.5rem">
+      <a href="#" id="all-facts">→ show every fact in this session (${r.records} record(s))</a>
+    </div>
+    <table><tbody>${
+      r.records.map((rec, i) => `
+        <tr data-iri="${esc(rec.record_iri)}" data-i="${i}">
+          <td>
+            <div><span class="module-pill ${esc(moduleShort(rec.module_iri))}">${esc(moduleShort(rec.module_iri))}</span><code>${esc(rec.record_iri)}</code></div>
+            <div class="meta">${ago(rec.created_at)} · ${rec.record_id.slice(0,8)}…</div>
+            <div class="facts-slot" id="facts-${i}"></div>
+          </td>
+        </tr>`).join('')
+    }</tbody></table>`;
+  $$('tbody tr', $('#records-list')).forEach(tr => {
+    tr.addEventListener('click', async (e) => {
+      if (e.target.closest('a')) return;
+      const slot = tr.querySelector('.facts-slot');
+      if (slot.innerHTML !== '') { slot.innerHTML = ''; return; }
+      slot.innerHTML = '<div class="meta">loading facts…</div>';
+      const f = await fetch(`/explore/facts.json?record_iri=${encodeURIComponent(tr.dataset.iri)}`).then(r=>r.json());
+      slot.innerHTML = renderFacts(f);
+    });
+  });
+  const allLink = $('#all-facts');
+  if (allLink) allLink.addEventListener('click', async (e) => {
+    e.preventDefault();
+    const target = $('#records-list');
+    target.innerHTML = '<div class="meta">loading every fact in session…</div>';
+    if (!sessionForFacts) {
+      target.innerHTML = '<div class="empty">no session id; facts can only be listed per-record above</div>';
+      return;
+    }
+    const f = await fetch(`/explore/facts.json?session=${encodeURIComponent(sessionForFacts)}&limit=500`).then(r=>r.json());
+    target.innerHTML = `<div class="meta" style="margin-bottom:0.3rem">${f.count} fact(s) under <code>${esc(sessionForFacts)}</code></div>` + renderFacts(f);
+  });
+}
+
+function renderFacts(f) {
+  if (!f.facts || f.facts.length === 0) return '<div class="empty">no facts</div>';
+  return `<table><thead><tr>
+    <th>subject</th><th>predicate</th><th>object</th>
+    <th class="meta">module</th>
+  </tr></thead><tbody>${
+    f.facts.map(s => `
+      <tr class="fact-row">
+        <td><span class="subj">${esc(s.subject)}</span></td>
+        <td><span class="pred">${esc(s.predicate)}</span></td>
+        <td>${objSummary(s)}</td>
+        <td class="meta">${esc((s.context||'').replace(/^ctx:memory\//,''))}</td>
+      </tr>`).join('')
+  }</tbody></table>`;
+}
+
+function updateCrumbs() {
+  const parts = ['<span><strong>holders</strong></span>'];
+  if (state.holder) {
+    parts.push('<span class="sep">›</span>',
+      `<span><code>${esc(state.holder)}</code></span>`);
+  }
+  if (state.session) {
+    parts.push('<span class="sep">›</span>',
+      `<span><span class="module-pill ${esc(moduleShort(state.module))}">${esc(moduleShort(state.module))}</span><code>${esc(state.session)}</code></span>`);
+  }
+  $('#crumbs').innerHTML = parts.join('');
+}
+
+let searchTimer;
+$('#holder-search').addEventListener('input', (e) => {
+  state.filterQ = e.target.value;
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(loadHolders, 200);
+});
+
+(async function init() {
+  await loadStats();
+  await loadHolders();
+})();
+</script>
+
+</main>
+</body>
+</html>
