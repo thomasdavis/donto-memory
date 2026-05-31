@@ -1,0 +1,11 @@
+const { recallMemoriesTool: t } = await import('/app/packages/agent/dist/tools/recallMemories.js');
+const r = {};
+const a = await t.execute({ query: 'Caroline Rose Davis', scope: 'all', limit: 6 }, {});
+r.all = { ok: a.success, total: a.row_count, mem: a.memory_row_count, sub: a.substrate_row_count,
+          genes: (a.rows||[]).filter(x=>(x.context||'').startsWith('ctx:genealogy')||(x.context||'').startsWith('ctx:genes')).length,
+          first2: (a.rows||[]).slice(0,2).map(x=>x.source).join('/') };
+const s = await t.execute({ query: 'Yeatman', scope: 'substrate', limit: 5 }, {});
+r.substrate = { ok: s.success, sub: s.substrate_row_count, mem: s.memory_row_count };
+const m = await t.execute({ query: 'car', scope: 'memories', limit: 5 }, {});
+r.memories = { ok: m.success, mem: m.memory_row_count, sub: m.substrate_row_count };
+console.log('E2E='+JSON.stringify(r));

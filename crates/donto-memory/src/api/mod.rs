@@ -69,6 +69,7 @@ pub fn router(state: AppState) -> Router {
         .route("/memorize", post(routes::memorize::memorize))
         .route("/memorize/batch", post(routes::memorize::memorize_batch))
         .route("/recall", post(routes::recall::recall))
+        .route("/search", post(routes::search::search))
         .route(
             "/reconsolidate/enqueue",
             post(routes::reconsolidate::enqueue),

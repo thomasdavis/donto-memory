@@ -6,3 +6,4 @@ pub mod memorize;
 pub mod modules;
 pub mod recall;
 pub mod reconsolidate;
+pub mod search;
