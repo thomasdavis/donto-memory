@@ -69,6 +69,14 @@ pub struct MemorizeReq {
     /// uses `DONTO_MEMORY_LLM_VISION_MODEL` instead of the default.
     #[serde(default)]
     pub images: Vec<String>,
+
+    /// Set by the Temporal `memorize_activity` when it re-submits a
+    /// deferred request with `async:false`. Carries the original
+    /// queue_id (= Temporal workflow id) so the synchronous completion
+    /// audit row can stamp it and be labelled as an async completion,
+    /// keeping /jobs correlation intact. Never set by external callers.
+    #[serde(default)]
+    pub queue_id: Option<Uuid>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -143,6 +151,50 @@ fn should_defer(req: &MemorizeReq, default_mode: &str) -> bool {
     )
 }
 
+/// Start a durable `MemorizeWorkflow` by POSTing to the Temporal
+/// enqueue gateway (the Python memory-worker's aiohttp `/enqueue`).
+/// The full, un-redacted request is forwarded (the activity needs real
+/// image bytes), with `queue_id` injected so the eventual synchronous
+/// re-submission stamps it back onto the completion audit row.
+///
+/// Returns `Ok(())` if the workflow was started or already exists
+/// (HTTP 2xx, or 409 = duplicate workflow id). Returns `Err` on any
+/// transport error or other status — the caller then falls back to an
+/// in-process task so the request is never dropped.
+async fn try_temporal_enqueue(
+    enqueue_url: &str,
+    queue_id: Uuid,
+    req: &MemorizeReq,
+) -> Result<(), String> {
+    let mut req_value = serde_json::to_value(req).map_err(|e| e.to_string())?;
+    if let Some(obj) = req_value.as_object_mut() {
+        obj.insert("queue_id".into(), json!(queue_id));
+    }
+    let payload = json!({ "workflow_id": queue_id, "req": req_value });
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .post(enqueue_url)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("enqueue request failed: {e}"))?;
+
+    let status = resp.status();
+    if status.is_success() || status.as_u16() == 409 {
+        Ok(())
+    } else {
+        let body = resp.text().await.unwrap_or_default();
+        Err(format!(
+            "enqueue HTTP {status}: {}",
+            body.chars().take(200).collect::<String>()
+        ))
+    }
+}
+
 pub async fn memorize(
     State(s): State<Arc<AppState>>,
     JsonReq(req): JsonReq<MemorizeReq>,
@@ -155,26 +207,58 @@ pub async fn memorize(
     let request_json = redact_images(serde_json::to_value(&req).unwrap_or_else(|_| json!({})));
 
     if should_defer(&req, &s.settings.extract_mode) {
-        // Async path: episodic + extraction happen in a spawned tokio
-        // task so the HTTP request can return immediately. The task
-        // writes its own job_log row when it finishes. We log a
-        // "queued" audit row right now so the /jobs page surfaces the
-        // pending work and callers know their request was accepted.
+        // Deferred path: return 202 immediately and run extraction out
+        // of band. Preferred mechanism is the durable Temporal queue
+        // (survives API restarts). If the Temporal enqueue gateway is
+        // unreachable we fall back to an in-process tokio task so a
+        // request is never dropped — just not restart-durable.
         let queue_id = Uuid::new_v4();
+
+        // Try the durable queue first.
+        let durable = match try_temporal_enqueue(
+            &s.settings.memorize_enqueue_url,
+            queue_id,
+            &req,
+        )
+        .await
+        {
+            Ok(()) => {
+                tracing::info!(
+                    queue_id = %queue_id,
+                    holder = %req.holder,
+                    mode = req.mode.as_deref().unwrap_or(&s.settings.extract_mode),
+                    "memorize enqueued to Temporal (durable)"
+                );
+                true
+            }
+            Err(e) => {
+                tracing::warn!(
+                    queue_id = %queue_id,
+                    error = %e,
+                    "Temporal enqueue failed; falling back to in-process tokio task (non-durable)"
+                );
+                false
+            }
+        };
+
         let queued_resp = json!({
             "status": "queued",
             "queue_id": queue_id,
+            "durable": durable,
             "holder": req.holder,
             "session_id": req.session_id,
             "extract_mode": req.mode.clone().unwrap_or_else(|| s.settings.extract_mode.clone()),
             "passes": req.passes,
-            "note": "extraction running in the background. Poll /recall or /jobs for results.",
+            "note": if durable {
+                "extraction queued on Temporal (durable). Poll /recall, /jobs, or the Temporal UI for results."
+            } else {
+                "extraction running in an in-process task (Temporal gateway unreachable). Poll /recall or /jobs for results."
+            },
         });
         // The "queued" audit row lets the /jobs list show the work as
-        // accepted-but-pending while the background task is still
-        // grinding through LLM calls.
-        let s_async = Arc::clone(&s);
-        let request_async = request_json.clone();
+        // accepted-but-pending. The `durable` flag tells the startup
+        // orphan-sweep whether this row can actually be lost to a
+        // restart (only non-durable fallback tasks can).
         let resp_for_log = queued_resp.clone();
         job_log::record_job(
             &s.pool,
@@ -190,6 +274,16 @@ pub async fn memorize(
         )
         .await;
 
+        // Durable path: Temporal owns execution now. The activity will
+        // re-submit to /memorize (async:false) and that synchronous call
+        // writes the (async) completion row. Nothing more to do here.
+        if durable {
+            return (StatusCode::ACCEPTED, Json(queued_resp)).into_response();
+        }
+
+        // Fallback path: run in-process (non-durable).
+        let s_async = Arc::clone(&s);
+        let request_async = request_json.clone();
         tokio::spawn(async move {
             // Serialize background memorize tasks — one at a time.
             // The user explicitly asked for serial extraction so
@@ -247,7 +341,7 @@ pub async fn memorize(
         return (StatusCode::ACCEPTED, Json(queued_resp)).into_response();
     }
 
-    let (status_code, resp_json) = match memorize_one(&s, &req).await {
+    let (status_code, mut resp_json) = match memorize_one(&s, &req).await {
         Ok(resp) => (200u16, serde_json::to_value(&resp).unwrap_or_else(|_| json!({}))),
         Err(MemorizeError::BadInput(msg)) => (400u16, json!({"error": msg})),
         Err(other) => (500u16, json!({"error": other.to_string()})),
@@ -265,10 +359,22 @@ pub async fn memorize(
             ..Default::default()
         }
     };
+    // When this synchronous call is the Temporal activity re-submitting a
+    // deferred request (queue_id present), stamp the queue_id into the
+    // response and label the audit row as an async completion so /jobs
+    // correlates it back to the original (queued) row.
+    let endpoint_label = if req.queue_id.is_some() {
+        if let Some(obj) = resp_json.as_object_mut() {
+            obj.insert("queue_id".into(), json!(req.queue_id));
+        }
+        if status_code < 400 { "POST /memorize (async)" } else { "POST /memorize (async-failed)" }
+    } else {
+        "POST /memorize"
+    };
     job_log::record_job(
         &s.pool,
         &s.settings.consumer_iri,
-        "POST /memorize",
+        endpoint_label,
         Some(&req.holder),
         req.session_id.as_deref(),
         status_code,

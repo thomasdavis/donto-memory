@@ -72,6 +72,15 @@ pub struct Settings {
     /// development but **leaves full memorized text content readable
     /// by anonymous internet visitors** on any public deployment.
     pub ops_token: Option<String>,
+
+    /// URL of the Temporal enqueue gateway (the Python memory-worker's
+    /// aiohttp `/enqueue` endpoint). Deferred /memorize requests POST
+    /// here to start a durable `MemorizeWorkflow` instead of running in
+    /// an in-process tokio task that would be lost on restart. When the
+    /// gateway is unreachable, the route falls back to the in-process
+    /// task so requests are never dropped. Default points at the
+    /// co-located worker on :7901.
+    pub memorize_enqueue_url: String,
 }
 
 impl Default for Settings {
@@ -100,6 +109,7 @@ impl Default for Settings {
             job_log_retention_days: 30,
             ocr_enabled: true,
             ops_token: None,
+            memorize_enqueue_url: "http://127.0.0.1:7901/enqueue".to_string(),
         }
     }
 }
@@ -198,6 +208,9 @@ impl Settings {
             if !trimmed.is_empty() {
                 s.ops_token = Some(trimmed.to_string());
             }
+        }
+        if let Ok(v) = std::env::var("DONTO_MEMORY_MEMORIZE_ENQUEUE_URL") {
+            s.memorize_enqueue_url = v;
         }
         s
     }

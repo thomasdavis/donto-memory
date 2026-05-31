@@ -147,6 +147,12 @@ async fn api(bind: Option<String>) -> Result<()> {
 /// `(async)` / `(async-failed)` completion, and write a
 /// `POST /memorize (lost)` audit row for each. Only touches rows older
 /// than 60 seconds so a healthy in-flight task isn't flagged.
+///
+/// Skips rows marked `"durable": true` — those were enqueued to the
+/// Temporal queue, which survives API restarts and resumes the
+/// workflow on its own. Only the in-process tokio *fallback* path
+/// (durable=false, used when the Temporal gateway was unreachable) can
+/// actually be lost to a restart, so only those are swept.
 async fn mark_orphaned_queued_rows(
     pool: &deadpool_postgres::Pool,
     consumer_iri: &str,
@@ -168,6 +174,7 @@ async fn mark_orphaned_queued_rows(
                from donto_x_memory_job_log q
               where q.endpoint = 'POST /memorize (queued)'
                 and q.created_at < now() - interval '60 seconds'
+                and coalesce(q.response->>'durable', 'false') <> 'true'
                 and not exists (
                   select 1 from donto_x_memory_job_log a
                    where a.endpoint in ('POST /memorize (async)', 'POST /memorize (async-failed)')
