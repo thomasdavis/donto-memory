@@ -576,6 +576,19 @@ async fn memorize_one(
         facts_ingested = outcome.ingested;
         semantic_record_ids = outcome.record_ids;
         warnings.extend(outcome.warnings);
+    } else if matches!(
+        req.mode.as_deref().map(str::to_ascii_lowercase).as_deref(),
+        Some("opencode") | Some("agentic")
+    ) {
+        // External-extraction mode (the OpenCode worker) but no facts were
+        // supplied — the agent yielded none or was interrupted. The
+        // episodic chunk is already stored; this is a clean no-op, not the
+        // "unknown extract mode" error from the in-process dispatch below.
+        effective_mode = req.mode.clone();
+        model = Some("upstream:opencode".to_string());
+        warnings.push(
+            "opencode mode: no facts supplied (agent yielded none); episodic stored only".into(),
+        );
     } else if req.extract {
         // 2. Optional in-process LLM extraction.
         match MemoryExtractor::from_settings(&s.settings) {
