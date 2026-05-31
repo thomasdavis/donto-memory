@@ -77,6 +77,15 @@ pub struct MemorizeReq {
     /// keeping /jobs correlation intact. Never set by external callers.
     #[serde(default)]
     pub queue_id: Option<Uuid>,
+
+    /// Pre-extracted facts supplied by an upstream extractor (e.g. the
+    /// OpenCode-agent memory worker). When non-empty, donto-memory
+    /// SKIPS its own LLM extraction and ingests these directly — the
+    /// episodic chunk is still stored and the self-read grant still
+    /// applied. Lets the heavy agentic extraction happen out of process
+    /// while donto-memory remains the single substrate-ingest authority.
+    #[serde(default)]
+    pub facts: Option<Vec<ExtractedFact>>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -148,6 +157,7 @@ fn should_defer(req: &MemorizeReq, default_mode: &str) -> bool {
     matches!(
         mode.as_str(),
         "deep" | "sequential" | "iterative" | "exhaustive" | "multi" | "apertures"
+            | "opencode" | "agentic"
     )
 }
 
@@ -553,8 +563,21 @@ async fn memorize_one(
     let mut effective_mode: Option<String> = None;
     let mut extracted_facts: Vec<ExtractedFact> = Vec::new();
 
-    if req.extract {
-        // 2. Optional LLM extraction.
+    if let Some(supplied) = req.facts.as_ref().filter(|f| !f.is_empty()) {
+        // Supplied-facts path: an upstream extractor (OpenCode agent)
+        // already produced the facts. Skip the in-process LLM entirely
+        // and ingest these directly. The episodic chunk + self-read
+        // grant above still applied.
+        effective_mode = Some(req.mode.clone().unwrap_or_else(|| "opencode".to_string()));
+        facts_extracted = supplied.len();
+        model = Some(format!("upstream:{}", effective_mode.as_deref().unwrap_or("opencode")));
+        extracted_facts = supplied.clone();
+        let outcome = ingest_fact_list(s, &semantic, supplied, req, &episodic_record.record_iri).await;
+        facts_ingested = outcome.ingested;
+        semantic_record_ids = outcome.record_ids;
+        warnings.extend(outcome.warnings);
+    } else if req.extract {
+        // 2. Optional in-process LLM extraction.
         match MemoryExtractor::from_settings(&s.settings) {
             None => {
                 warnings.push(
@@ -623,80 +646,13 @@ async fn memorize_one(
                         usage = result.usage.clone();
                         aperture_yields = result.aperture_yields.clone();
                         extracted_facts = result.facts.clone();
-                        tracing::info!(
-                            holder = req.holder.as_str(),
-                            session_id = req.session_id.as_deref().unwrap_or("-"),
-                            facts_to_ingest = result.facts.len(),
-                            "starting semantic fact ingest"
-                        );
-                        let ingest_started = std::time::Instant::now();
-                        let mut last_log = std::time::Instant::now();
-                        let mut ingest_errors = 0usize;
-                        let mut ingest_skipped = 0usize;
-                        for (i, fact) in result.facts.iter().enumerate() {
-                            // Skip facts the LLM emitted without an object
-                            // (or with both object_iri and object_lit set).
-                            // Semantic-claim's "exactly one" check would
-                            // reject them anyway — filtering here keeps
-                            // them out of the per-fact warn flood and out
-                            // of the error count, since the failure mode
-                            // is bad LLM output, not a substrate bug.
-                            if !fact.is_ingestable() {
-                                ingest_skipped += 1;
-                                continue;
-                            }
-                            match ingest_fact(s, &semantic, fact, req, &episodic_record.record_iri)
-                                .await
-                            {
-                                Ok(id) => {
-                                    facts_ingested += 1;
-                                    semantic_record_ids.push(id);
-                                }
-                                Err(e) => {
-                                    ingest_errors += 1;
-                                    warnings.push(format!(
-                                        "fact ingest failed (subject={}, predicate={}): {e}",
-                                        fact.subject, fact.predicate
-                                    ));
-                                    if ingest_errors <= 5 {
-                                        warn!(
-                                            holder = req.holder.as_str(),
-                                            fact_index = i,
-                                            subject = fact.subject.as_str(),
-                                            predicate = fact.predicate.as_str(),
-                                            error = %e,
-                                            "fact ingest failed"
-                                        );
-                                    }
-                                }
-                            }
-                            if last_log.elapsed() >= std::time::Duration::from_secs(5) {
-                                tracing::info!(
-                                    holder = req.holder.as_str(),
-                                    progress = format!("{}/{}", i + 1, result.facts.len()).as_str(),
-                                    ingested = facts_ingested,
-                                    errors = ingest_errors,
-                                    elapsed_ms = ingest_started.elapsed().as_millis() as u64,
-                                    "ingest progress"
-                                );
-                                last_log = std::time::Instant::now();
-                            }
-                        }
-                        if ingest_skipped > 0 {
-                            warnings.push(format!(
-                                "{ingest_skipped} fact(s) skipped (LLM emitted without exactly one object)"
-                            ));
-                        }
-                        tracing::info!(
-                            holder = req.holder.as_str(),
-                            session_id = req.session_id.as_deref().unwrap_or("-"),
-                            total = result.facts.len(),
-                            ingested = facts_ingested,
-                            errors = ingest_errors,
-                            skipped = ingest_skipped,
-                            elapsed_ms = ingest_started.elapsed().as_millis() as u64,
-                            "ingest complete"
-                        );
+                        let outcome = ingest_fact_list(
+                            s, &semantic, &result.facts, req, &episodic_record.record_iri,
+                        )
+                        .await;
+                        facts_ingested = outcome.ingested;
+                        semantic_record_ids = outcome.record_ids;
+                        warnings.extend(outcome.warnings);
                     }
                 }
             }
@@ -721,6 +677,104 @@ async fn memorize_one(
         elapsed_ms: started.elapsed().as_millis() as u64,
         warnings,
     })
+}
+
+/// Outcome of ingesting a list of facts into the semantic-claim module.
+struct IngestOutcome {
+    ingested: usize,
+    errors: usize,
+    skipped: usize,
+    record_ids: Vec<Uuid>,
+    warnings: Vec<String>,
+}
+
+/// Ingest a list of already-extracted facts as semantic claims, anchored
+/// to the episodic chunk. Shared by both the in-process LLM-extraction
+/// path and the supplied-facts path (OpenCode agent), so the ingest
+/// behaviour — skip-unigestable, per-fact error capture, progress
+/// logging — is identical regardless of where the facts came from.
+async fn ingest_fact_list(
+    s: &Arc<AppState>,
+    semantic: &MemoryModuleArc,
+    facts: &[ExtractedFact],
+    req: &MemorizeReq,
+    episodic_iri: &str,
+) -> IngestOutcome {
+    tracing::info!(
+        holder = req.holder.as_str(),
+        session_id = req.session_id.as_deref().unwrap_or("-"),
+        facts_to_ingest = facts.len(),
+        "starting semantic fact ingest"
+    );
+    let ingest_started = std::time::Instant::now();
+    let mut last_log = std::time::Instant::now();
+    let mut out = IngestOutcome {
+        ingested: 0,
+        errors: 0,
+        skipped: 0,
+        record_ids: Vec::new(),
+        warnings: Vec::new(),
+    };
+    for (i, fact) in facts.iter().enumerate() {
+        // Skip facts emitted without exactly one object — semantic-claim
+        // would reject them anyway; filtering keeps the warn flood + the
+        // error count clean (it's bad upstream output, not a substrate bug).
+        if !fact.is_ingestable() {
+            out.skipped += 1;
+            continue;
+        }
+        match ingest_fact(s, semantic, fact, req, episodic_iri).await {
+            Ok(id) => {
+                out.ingested += 1;
+                out.record_ids.push(id);
+            }
+            Err(e) => {
+                out.errors += 1;
+                out.warnings.push(format!(
+                    "fact ingest failed (subject={}, predicate={}): {e}",
+                    fact.subject, fact.predicate
+                ));
+                if out.errors <= 5 {
+                    warn!(
+                        holder = req.holder.as_str(),
+                        fact_index = i,
+                        subject = fact.subject.as_str(),
+                        predicate = fact.predicate.as_str(),
+                        error = %e,
+                        "fact ingest failed"
+                    );
+                }
+            }
+        }
+        if last_log.elapsed() >= std::time::Duration::from_secs(5) {
+            tracing::info!(
+                holder = req.holder.as_str(),
+                progress = format!("{}/{}", i + 1, facts.len()).as_str(),
+                ingested = out.ingested,
+                errors = out.errors,
+                elapsed_ms = ingest_started.elapsed().as_millis() as u64,
+                "ingest progress"
+            );
+            last_log = std::time::Instant::now();
+        }
+    }
+    if out.skipped > 0 {
+        out.warnings.push(format!(
+            "{} fact(s) skipped (emitted without exactly one object)",
+            out.skipped
+        ));
+    }
+    tracing::info!(
+        holder = req.holder.as_str(),
+        session_id = req.session_id.as_deref().unwrap_or("-"),
+        total = facts.len(),
+        ingested = out.ingested,
+        errors = out.errors,
+        skipped = out.skipped,
+        elapsed_ms = ingest_started.elapsed().as_millis() as u64,
+        "ingest complete"
+    );
+    out
 }
 
 async fn ingest_fact(

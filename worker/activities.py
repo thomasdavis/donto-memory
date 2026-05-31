@@ -7,11 +7,15 @@ all extraction logic in Rust and makes the activity a thin, durable,
 retryable wrapper.
 """
 
+import asyncio
 import logging
 import os
 
 import httpx
 from temporalio import activity
+
+from opencode_agent import OpenCodeAgent, DEFAULT_MODEL
+from extraction import extract_facts
 
 logger = logging.getLogger("memory-worker")
 
@@ -45,14 +49,23 @@ async def memorize_activity(req: dict) -> dict:
         holder, session, mode, body.get("passes"),
     )
 
-    # Heartbeat before the long call so Temporal knows we're alive; the
-    # call itself is a single blocking await, so we heartbeat once up
-    # front (the heartbeat_timeout is 3 min, the activity attempt is one
-    # long HTTP request — if the worker dies, Temporal re-dispatches).
+    # Deep extraction is a single long HTTP request (minutes). The
+    # workflow sets a 3-min heartbeat_timeout so a dead worker is
+    # detected fast, which means we MUST heartbeat throughout the call —
+    # otherwise Temporal cancels a perfectly healthy long-running
+    # activity. Run the POST as a task and heartbeat every 30s while it
+    # is in flight.
     activity.heartbeat("submitting")
-
     async with httpx.AsyncClient(timeout=ACTIVITY_HTTP_TIMEOUT_S) as client:
-        resp = await client.post(f"{DONTO_MEMORY_URL}/memorize", json=body)
+        post_task = asyncio.ensure_future(
+            client.post(f"{DONTO_MEMORY_URL}/memorize", json=body)
+        )
+        while True:
+            done, _ = await asyncio.wait({post_task}, timeout=30)
+            if post_task in done:
+                break
+            activity.heartbeat("extracting")
+        resp = post_task.result()
 
     if resp.status_code != 200:
         # Non-200 → raise so Temporal retries per the workflow policy.
@@ -73,5 +86,89 @@ async def memorize_activity(req: dict) -> dict:
     logger.info(
         "memorize_activity done holder=%s ingested=%s mode=%s elapsed_ms=%s",
         holder, summary["facts_ingested"], summary["extract_mode"], summary["elapsed_ms"],
+    )
+    return summary
+
+
+# Cap passes so a bad request can't run the agent forever.
+MAX_OPENCODE_PASSES = int(os.environ.get("MAX_OPENCODE_PASSES", "5"))
+
+
+@activity.defn
+async def opencode_extract_activity(req: dict) -> dict:
+    """Run the OpenCode agent to extract facts from req['text'].
+
+    Expensive (minutes per pass). Returns {facts, passes}. Temporal caches
+    this result, so a downstream ingest failure does NOT re-run the agent.
+    Heartbeats throughout so a dead worker is detected without cancelling a
+    healthy long run.
+    """
+    text = req.get("text") or ""
+    passes = max(1, min(MAX_OPENCODE_PASSES, int(req.get("passes") or 1)))
+    model = req.get("opencode_model") or DEFAULT_MODEL
+    holder = req.get("holder", "?")
+    logger.info(
+        "opencode_extract start holder=%s passes=%s model=%s chars=%d",
+        holder, passes, model, len(text),
+    )
+
+    agent = OpenCodeAgent(model=model)
+    activity.heartbeat("extracting")
+
+    # extract_facts is blocking (spawns opencode per pass). Run it off the
+    # event loop and heartbeat every 30s while it works.
+    task = asyncio.ensure_future(
+        asyncio.to_thread(extract_facts, text, agent=agent, passes=passes)
+    )
+    while True:
+        done, _ = await asyncio.wait({task}, timeout=30)
+        if task in done:
+            break
+        activity.heartbeat("extracting")
+    result = task.result()
+
+    logger.info(
+        "opencode_extract done holder=%s facts=%d passes=%s",
+        holder, len(result.get("facts", [])), result.get("passes"),
+    )
+    return result
+
+
+@activity.defn
+async def ingest_facts_activity(payload: dict) -> dict:
+    """POST pre-extracted facts to donto-memory's supplied-facts path
+    (async:false, so it ingests synchronously without its own LLM)."""
+    req = payload["req"]
+    facts = payload.get("facts") or []
+    body = {
+        "holder": req["holder"],
+        "session_id": req.get("session_id"),
+        "text": req.get("text") or "",
+        "modality": req.get("modality") or "descriptive",
+        "mode": "opencode",
+        "async": False,
+        "facts": facts,
+    }
+    if req.get("queue_id"):
+        body["queue_id"] = req["queue_id"]
+
+    async with httpx.AsyncClient(timeout=ACTIVITY_HTTP_TIMEOUT_S) as client:
+        resp = await client.post(f"{DONTO_MEMORY_URL}/memorize", json=body)
+    if resp.status_code != 200:
+        text = resp.text[:500]
+        logger.warning("ingest_facts non-200 %s: %s", resp.status_code, text)
+        raise RuntimeError(f"donto-memory /memorize (facts) {resp.status_code}: {text}")
+    data = resp.json()
+    summary = {
+        "episodic_record_id": data.get("episodic_record_id"),
+        "facts_extracted": data.get("facts_extracted", 0),
+        "facts_ingested": data.get("facts_ingested", 0),
+        "extract_mode": data.get("extract_mode"),
+        "model": data.get("model"),
+        "passes": payload.get("passes"),
+    }
+    logger.info(
+        "ingest_facts done holder=%s supplied=%d ingested=%s",
+        req.get("holder", "?"), len(facts), summary["facts_ingested"],
     )
     return summary

@@ -27,7 +27,11 @@ from temporalio.client import Client
 from temporalio.worker import Worker
 
 from workflows import MemorizeWorkflow
-from activities import memorize_activity
+from activities import (
+    memorize_activity,
+    opencode_extract_activity,
+    ingest_facts_activity,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -101,7 +105,7 @@ async def main() -> None:
         client,
         task_queue=TASK_QUEUE,
         workflows=[MemorizeWorkflow],
-        activities=[memorize_activity],
+        activities=[memorize_activity, opencode_extract_activity, ingest_facts_activity],
         max_concurrent_activities=MAX_CONCURRENT,
         max_concurrent_workflow_tasks=MAX_CONCURRENT,
     )

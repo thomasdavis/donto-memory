@@ -46,6 +46,13 @@ pub struct Settings {
     /// is already vision-capable).
     pub llm_vision_model: Option<String>,
     pub llm_temperature: f32,
+    /// Max tokens per extraction LLM call. Caps reasoning + output
+    /// combined, so reasoning models (GLM-5.x) need this high to leave
+    /// room for a long fact list after their reasoning budget. On a
+    /// flat-rate coding subscription, large values are free — push it
+    /// up to extract thousands of facts per input.
+    /// Env: DONTO_MEMORY_LLM_MAX_TOKENS. Default 16000.
+    pub llm_max_tokens: u32,
 
     /// Default extraction mode for `/memorize`:
     ///   - `single`      — one LLM call, ~20-30 facts.
@@ -105,6 +112,7 @@ impl Default for Settings {
             llm_model: "z-ai/glm-5".to_string(),
             llm_vision_model: None,
             llm_temperature: 0.2,
+            llm_max_tokens: 16000,
             extract_mode: "exhaustive".to_string(),
             job_log_retention_days: 30,
             ocr_enabled: true,
@@ -190,6 +198,11 @@ impl Settings {
         if let Ok(v) = std::env::var("DONTO_MEMORY_LLM_TEMPERATURE") {
             if let Ok(n) = v.parse() {
                 s.llm_temperature = n;
+            }
+        }
+        if let Ok(v) = std::env::var("DONTO_MEMORY_LLM_MAX_TOKENS") {
+            if let Ok(n) = v.parse() {
+                s.llm_max_tokens = n;
             }
         }
         if let Ok(v) = std::env::var("DONTO_MEMORY_EXTRACT_MODE") {

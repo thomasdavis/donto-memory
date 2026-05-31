@@ -279,6 +279,7 @@ pub struct MemoryExtractor {
     /// already vision-capable).
     vision_model: Option<String>,
     temperature: f32,
+    max_tokens: u32,
     http: Client,
 }
 
@@ -300,6 +301,7 @@ impl MemoryExtractor {
             model: settings.llm_model.clone(),
             vision_model: settings.llm_vision_model.clone(),
             temperature: settings.llm_temperature,
+            max_tokens: settings.llm_max_tokens,
             http,
         })
     }
@@ -771,7 +773,7 @@ impl MemoryExtractor {
         let req = serde_json::json!({
             "model": chosen_model,
             "temperature": self.temperature,
-            "max_tokens": 8000,
+            "max_tokens": self.max_tokens,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message_content},
