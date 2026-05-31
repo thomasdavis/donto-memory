@@ -166,9 +166,15 @@ class OpenCodeAgent:
             f'timeout {timeout} opencode run --dangerously-skip-permissions '
             f'--format json "$(cat prompt.txt)"'
         )
+        # HOME is set to this run's own dir so opencode's per-user state
+        # (its sqlite db etc.) is isolated per run. Without this, multiple
+        # concurrent opencode processes in the same container would clash
+        # on a shared sqlite db (SQLITE_BUSY). This is what makes worker
+        # concurrency > 1 safe against one shared runner container.
         argv = [
             DOCKER, "exec",
             "-e", f"OPENCODE_CONFIG_CONTENT={self._config_json(model)}",
+            "-e", f"HOME={cont_dir}",
             self.container, "sh", "-c", inner,
         ]
 
