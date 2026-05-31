@@ -388,12 +388,25 @@ pub struct StatementHit {
     pub score: f64,
 }
 
+/// Tokenize a free-text query into ILIKE patterns. Splits on
+/// whitespace, drops empties, lowercases, and wraps each token in
+/// `%…%`. Multi-word queries become AND-of-ILIKE per token so
+/// "dogs cats" finds rows matching both "dogs" somewhere and "cats"
+/// somewhere — rather than the literal substring "dogs cats".
+fn tokenize_query(query: &str) -> Vec<String> {
+    query
+        .split_whitespace()
+        .filter(|t| !t.is_empty())
+        .map(|t| format!("%{}%", t.to_lowercase()))
+        .collect()
+}
+
 /// Full-text search over `donto_statement`, restricted to statement_ids
-/// the caller already vetted as belonging to the holder. Uses the
-/// `gin_trgm_ops` indexes on `subject` and `(object_lit->>'v')`. The
-/// `predicate` and `object_iri` columns get a plain ILIKE scan, which
-/// is cheap because the statement_id whitelist keeps the result set
-/// small.
+/// the caller already vetted as belonging to the holder. Multi-word
+/// queries are AND-of-ILIKE per token (each token must match at least
+/// one of subject / object_lit / object_iri / predicate). The
+/// statement_id whitelist keeps the result set small enough that a
+/// sequential ILIKE scan is fine without the gin_trgm indexes.
 ///
 /// Skipped automatically when the owned set is empty.
 pub async fn fulltext_search_owned_statements(
@@ -402,35 +415,43 @@ pub async fn fulltext_search_owned_statements(
     query: &str,
     limit: i32,
 ) -> Result<Vec<StatementHit>, OverlayError> {
-    if owned.is_empty() || query.is_empty() {
+    let tokens = tokenize_query(query);
+    if owned.is_empty() || tokens.is_empty() {
         return Ok(Vec::new());
     }
     let c = pool.get().await?;
-    let pattern = format!("%{query}%");
     let ids: Vec<Uuid> = owned.iter().copied().collect();
-    // Score is a coarse boost: subject match > object_lit match >
-    // predicate / object_iri match. Within a tier, order by tx_lo desc
-    // so the freshest fact wins.
+    // Each token must match somewhere (NOT EXISTS unmatched token in
+    // the array). Score is a sum-of-tiers across tokens — every token
+    // hit contributes; subject hits weigh more than predicate hits.
     let rows = c
         .query(
             "select statement_id, subject, predicate, object_iri, object_lit, \
                     context, lower(tx_time) as tx_lo, upper(tx_time) as tx_hi, \
                     flags, \
-                    (case when subject ilike $1 then 1.0::float8 \
-                          when coalesce(object_lit->>'v','') ilike $1 then 0.8::float8 \
-                          when coalesce(object_iri,'') ilike $1 then 0.6::float8 \
-                          when predicate ilike $1 then 0.4::float8 \
-                          else 0.0::float8 end) as score \
+                    coalesce(( \
+                      select sum( \
+                        case when subject ilike t then 1.0::float8 \
+                             when coalesce(object_lit->>'v','') ilike t then 0.8::float8 \
+                             when coalesce(object_iri,'') ilike t then 0.6::float8 \
+                             when predicate ilike t then 0.4::float8 \
+                             else 0.0::float8 end) \
+                      from unnest($1::text[]) as t \
+                    ), 0.0::float8) as score \
                from donto_statement \
               where statement_id = any($2) \
                 and upper(tx_time) is null \
-                and ( subject ilike $1 \
-                   or coalesce(object_lit->>'v','') ilike $1 \
-                   or coalesce(object_iri,'') ilike $1 \
-                   or predicate ilike $1 ) \
+                and not exists ( \
+                  select 1 from unnest($1::text[]) as t \
+                   where not ( \
+                        subject ilike t \
+                     or coalesce(object_lit->>'v','') ilike t \
+                     or coalesce(object_iri,'') ilike t \
+                     or predicate ilike t ) \
+                ) \
               order by score desc, lower(tx_time) desc \
               limit $3",
-            &[&pattern, &ids, &(limit as i64)],
+            &[&tokens, &ids, &(limit as i64)],
         )
         .await?;
     Ok(rows
@@ -461,12 +482,16 @@ pub async fn fulltext_search_owned_episodic(
     query: &str,
     limit: i32,
 ) -> Result<Vec<StatementHit>, OverlayError> {
-    if owned_record_iris.is_empty() || query.is_empty() {
+    let tokens = tokenize_query(query);
+    if owned_record_iris.is_empty() || tokens.is_empty() {
         return Ok(Vec::new());
     }
     let c = pool.get().await?;
-    let pattern = format!("%{query}%");
     let iris: Vec<String> = owned_record_iris.iter().cloned().collect();
+    // Each token must appear somewhere in the chunk text. AND across
+    // tokens via NOT EXISTS unmatched-token. Score sums hits so
+    // chunks containing all tokens rank above partial matches when
+    // we later relax the AND to OR.
     let rows = c
         .query(
             "select statement_id, subject, predicate, object_iri, object_lit, \
@@ -476,10 +501,13 @@ pub async fn fulltext_search_owned_episodic(
               where predicate = $1 \
                 and subject = any($2) \
                 and upper(tx_time) is null \
-                and coalesce(object_lit->>'v','') ilike $3 \
+                and not exists ( \
+                  select 1 from unnest($3::text[]) as t \
+                   where not coalesce(object_lit->>'v','') ilike t \
+                ) \
               order by lower(tx_time) desc \
               limit $4",
-            &[&predicate_filter, &iris, &pattern, &(limit as i64)],
+            &[&predicate_filter, &iris, &tokens, &(limit as i64)],
         )
         .await?;
     Ok(rows
