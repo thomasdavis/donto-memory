@@ -190,7 +190,7 @@ def extract_facts(
     agent: OpenCodeAgent,
     passes: int = 1,
     target_per_pass: int = 400,
-    timeout_per_pass: int = 540,
+    timeout_per_pass: int = 780,
     model: str | None = None,
 ) -> dict:
     """Run N agentic extraction passes over `text`, deduping across passes.
